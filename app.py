@@ -1,11 +1,9 @@
 import io
 import re
 from datetime import datetime
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -15,12 +13,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
-
-# 컬럼 자동 감지 키워드
 DATE_KEYWORDS     = ["사용일", "거래일", "승인일", "결제일", "일자", "날짜", "date"]
 TIME_KEYWORDS     = ["사용시간", "거래시간", "승인시간", "시간", "time"]
 AMOUNT_KEYWORDS   = ["승인금액", "사용금액", "거래금액", "결제금액", "금액", "amount"]
@@ -30,7 +25,6 @@ CARD_KEYWORDS     = ["카드번호", "카드번", "카드", "card"]
 USER_KEYWORDS     = ["사용자명", "사용자", "카드소유자", "소유자", "성명", "이름", "사원명", "사원", "user"]
 DEPT_KEYWORDS     = ["부서명", "부서", "팀명", "팀", "department", "dept"]
 
-# 유흥·사치성 업종 키워드 (기본값)
 DEFAULT_SUSPICIOUS_KEYWORDS = [
     "유흥", "나이트", "클럽", "룸살롱", "단란주점", "유흥주점", "소주방",
     "노래방", "가라오케", "노래클럽",
@@ -42,18 +36,16 @@ DEFAULT_SUSPICIOUS_KEYWORDS = [
     "명품", "루이비통", "구찌", "에르메스", "샤넬", "프라다", "버버리", "몽클레어",
     "호스트바", "호프바",
 ]
-
 FLAG_LABEL = {
     "주말_공휴일": "주말/공휴일",
     "심야_새벽":   "심야/새벽",
     "유흥_사치성": "유흥·사치성 업종",
     "반복거래":    "반복거래",
+    "고액_거래":   "고액 거래",
 }
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers: column auto-detection
 # ─────────────────────────────────────────────────────────────────────────────
-
 def find_best_column(columns: list[str], keywords: list[str]) -> str | None:
     lower_cols = [(c, c.lower().replace(" ", "")) for c in columns]
     for kw in keywords:
@@ -62,7 +54,6 @@ def find_best_column(columns: list[str], keywords: list[str]) -> str | None:
             if kw_l in col_l:
                 return col
     return None
-
 
 def auto_detect_columns(columns: list[str]) -> dict:
     return {
@@ -76,21 +67,16 @@ def auto_detect_columns(columns: list[str]) -> dict:
         "dept":     find_best_column(columns, DEPT_KEYWORDS),
     }
 
-
 def col_index(options: list[str], value: str | None) -> int:
     if value and value in options:
         return options.index(value)
-    return 0  # "(사용 안함)"
-
+    return 0
 
 def to_none(v: str) -> str | None:
     return v if v != "(사용 안함)" else None
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers: datetime parsing
 # ─────────────────────────────────────────────────────────────────────────────
-
 def parse_datetimes(df: pd.DataFrame, date_col: str, time_col: str | None) -> pd.Series:
     try:
         if time_col and time_col in df.columns:
@@ -100,7 +86,6 @@ def parse_datetimes(df: pd.DataFrame, date_col: str, time_col: str | None) -> pd
     except Exception:
         return pd.Series([pd.NaT] * len(df), index=df.index)
 
-
 def series_has_time(df: pd.DataFrame, date_col: str, time_col: str | None) -> bool:
     if time_col:
         return True
@@ -109,12 +94,9 @@ def series_has_time(df: pd.DataFrame, date_col: str, time_col: str | None) -> bo
         return bool(sample.str.contains(r"[:\-]\d{2}:\d{2}", regex=True).any())
     except Exception:
         return False
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Anomaly detectors
 # ─────────────────────────────────────────────────────────────────────────────
-
 @st.cache_data(show_spinner=False)
 def load_kr_holidays() -> set[str]:
     try:
@@ -124,7 +106,6 @@ def load_kr_holidays() -> set[str]:
     except ImportError:
         st.warning("`holidays` 패키지를 설치하면 공휴일 탐지가 가능합니다.")
         return set()
-
 
 def detect_weekend_holiday(datetimes: pd.Series, kr_holidays: set[str]):
     DOW = ["월", "화", "수", "목", "금", "토", "일"]
@@ -141,7 +122,6 @@ def detect_weekend_holiday(datetimes: pd.Series, kr_holidays: set[str]):
             flags.append(False); reasons.append("")
     return flags, reasons
 
-
 def detect_late_night(datetimes: pd.Series, start_h: int = 22, end_h: int = 6):
     flags, reasons = [], []
     for dt in datetimes:
@@ -153,7 +133,6 @@ def detect_late_night(datetimes: pd.Series, start_h: int = 22, end_h: int = 6):
         else:
             flags.append(False); reasons.append("")
     return flags, reasons
-
 
 def detect_suspicious(df: pd.DataFrame, merchant_col: str | None,
                       category_col: str | None, keywords: list[str]):
@@ -175,7 +154,6 @@ def detect_suspicious(df: pd.DataFrame, merchant_col: str | None,
         flags.append(found); reasons.append(reason)
     return flags, reasons
 
-
 def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
                   date_col: str, window_days: int = 7, min_count: int = 2):
     n = len(df)
@@ -187,7 +165,6 @@ def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
         work["_amt_"]   = df[amount_col].astype(str).str.replace(",", "").str.strip()
         work["_merch_"] = df[merchant_col].astype(str).str.strip()
         work["_pos_"]   = range(n)
-
         for (merch, amt), grp in work.groupby(["_merch_", "_amt_"]):
             if len(grp) < min_count or merch in ("nan", "") or amt in ("nan", "0", ""):
                 continue
@@ -209,18 +186,30 @@ def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
         pass
     return flags, reasons
 
-
+def detect_high_amount(df: pd.DataFrame, amount_col: str, threshold: int):
+    flags, reasons = [], []
+    for val in df[amount_col]:
+        try:
+            amt = float(str(val).replace(",", "").strip())
+            if amt >= threshold:
+                flags.append(True)
+                reasons.append(f"고액거래({amt:,.0f}원)")
+            else:
+                flags.append(False)
+                reasons.append("")
+        except Exception:
+            flags.append(False)
+            reasons.append("")
+    return flags, reasons
 # ─────────────────────────────────────────────────────────────────────────────
 # Main app
 # ─────────────────────────────────────────────────────────────────────────────
-
 def main():
     st.title("🔍 법인카드 이상징후 스크리닝 시스템")
     st.caption("엑셀/CSV 파일을 업로드하면 자동으로 이상징후를 분석합니다.")
 
     with st.sidebar:
         st.header("⚙️ 탐지 설정")
-
         use_weekend = st.checkbox("주말/공휴일 사용 탐지", value=True)
         use_late_night = st.checkbox("심야/새벽 사용 탐지", value=True)
         if use_late_night:
@@ -230,12 +219,26 @@ def main():
             late_start, late_end = 22, 6
 
         use_suspicious = st.checkbox("유흥·사치성 업종 탐지", value=True)
+
         use_repeat = st.checkbox("반복거래 탐지", value=True)
         if use_repeat:
             repeat_window = st.slider("반복 탐지 기간 (일)", 1, 30, 7)
             repeat_min    = st.slider("반복 최소 횟수", 2, 5, 2)
         else:
             repeat_window, repeat_min = 7, 2
+
+        use_high_amount = st.checkbox("고액 거래 탐지", value=False)
+        if use_high_amount:
+            high_amount_threshold = st.number_input(
+                "기준 금액 (원) — 이 금액 이상을 탐지",
+                min_value=0,
+                value=300000,
+                step=10000,
+                format="%d",
+            )
+            st.caption(f"현재 기준: **{int(high_amount_threshold):,}원** 이상")
+        else:
+            high_amount_threshold = 300000
 
         st.divider()
         st.subheader("🔑 추가 키워드")
@@ -257,7 +260,6 @@ def main():
         type=["xlsx", "xls", "csv"],
         help="Excel(.xlsx .xls) 또는 CSV 파일을 지원합니다.",
     )
-
     if uploaded is None:
         st.info("👆 파일을 업로드하면 분석이 시작됩니다.")
         with st.expander("📋 지원하는 샘플 데이터 형식"):
@@ -306,7 +308,6 @@ def main():
     st.header("2️⃣ 컬럼 매핑")
     auto = auto_detect_columns(df.columns.tolist())
     opts = ["(사용 안함)"] + df.columns.tolist()
-
     with st.expander("컬럼 매핑 확인 / 수정", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -338,7 +339,6 @@ def main():
         return
 
     progress = st.progress(0, text="분석 준비 중...")
-
     result = df.copy()
     datetimes = parse_datetimes(df, date_col, time_col)
     result["_dt_"] = datetimes
@@ -377,8 +377,14 @@ def main():
         result["반복거래_사유"] = r
         flag_cols.append("반복거래")
 
-    progress.progress(90, text="결과 집계 중...")
+    if use_high_amount and amount_col:
+        progress.progress(85, text="고액 거래 탐지 중...")
+        f, r = detect_high_amount(df, amount_col, int(high_amount_threshold))
+        result["고액_거래"] = f
+        result["고액_거래_사유"] = r
+        flag_cols.append("고액_거래")
 
+    progress.progress(90, text="결과 집계 중...")
     result["위험점수"] = result[flag_cols].sum(axis=1).astype(int)
     result["위험등급"] = result["위험점수"].map(
         lambda s: "🔴 위험" if s >= 2 else ("🟡 주의" if s == 1 else "🟢 정상")
@@ -388,16 +394,13 @@ def main():
         lambda row: " | ".join(v for v in row if v and str(v) not in ("", "nan")),
         axis=1,
     )
-
     progress.progress(100, text="완료!")
     progress.empty()
 
     st.header("4️⃣ 분석 결과")
-
     total     = len(result)
     flagged   = int((result["위험점수"] > 0).sum())
     high_risk = int((result["위험점수"] >= 2).sum())
-
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("총 거래건수",   f"{total:,}건")
     m2.metric("이상 의심 거래", f"{flagged:,}건", f"{flagged/total*100:.1f}%")
@@ -414,7 +417,6 @@ def main():
 
     if flag_cols:
         chart1, chart2 = st.columns(2)
-
         with chart1:
             cnt_data = pd.DataFrame({
                 "항목":  [FLAG_LABEL.get(c, c) for c in flag_cols],
@@ -429,7 +431,6 @@ def main():
             fig1.update_traces(textposition="outside")
             fig1.update_layout(showlegend=False, coloraxis_showscale=False)
             st.plotly_chart(fig1, use_container_width=True)
-
         with chart2:
             risk_cnt = result["위험등급"].value_counts().reset_index()
             risk_cnt.columns = ["등급", "건수"]
@@ -473,10 +474,15 @@ def main():
             except Exception:
                 pass
         user_stats = user_stats.sort_values("이상건수", ascending=False)
-        st.dataframe(user_stats, use_container_width=True, hide_index=True)
+        col_cfg = {}
+        if "이상금액합계" in user_stats.columns:
+            col_cfg["이상금액합계"] = st.column_config.NumberColumn(
+                "이상금액합계 (원)", format="%,d"
+            )
+        st.dataframe(user_stats, use_container_width=True, hide_index=True,
+                     column_config=col_cfg if col_cfg else None)
 
     st.subheader("📋 상세 결과")
-
     fa, fb = st.columns([1, 2])
     with fa:
         show_filter = st.selectbox(
@@ -515,14 +521,21 @@ def main():
             return ["background-color: #fef9e7"] * len(row)
         return [""] * len(row)
 
+    fmt = {}
+    if amount_col and amount_col in show_cols:
+        fmt[amount_col] = lambda x: (
+            f"{float(str(x).replace(',', '')):,.0f}"
+            if str(x) not in ("nan", "") else "-"
+        )
+
     st.caption(f"표시 건수: {len(display):,}건")
     styled = display[show_cols].style.apply(row_style, axis=1)
+    if fmt:
+        styled = styled.format(fmt, na_rep="-")
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
 
     st.subheader("📥 결과 다운로드")
-
     export = result.drop(columns=["_dt_", "_amt_num_"], errors="ignore")
-
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         export.to_excel(writer, sheet_name="전체결과", index=False)
@@ -533,7 +546,6 @@ def main():
             "값":   [total, flagged, high_risk, f"{flagged/total*100:.1f}%"],
         })
         summary.to_excel(writer, sheet_name="요약", index=False)
-
     buf.seek(0)
     st.download_button(
         label="📥 분석 결과 엑셀 다운로드",
@@ -542,7 +554,6 @@ def main():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
-
 
 if __name__ == "__main__":
     main()
