@@ -363,74 +363,108 @@ def main():
         return
 
     st.header("3️⃣ 스크리닝 실행")
-    if not st.button("🔍 이상징후 스크리닝 시작", type="primary", use_container_width=True):
+    run_clicked = st.button("🔍 이상징후 스크리닝 시작", type="primary", use_container_width=True)
+
+    # 파일이 바뀌면 이전 분석 결과 초기화
+    _file_key = f"{uploaded.name}_{uploaded.size}"
+    if st.session_state.get("_file_key") != _file_key:
+        st.session_state.pop("_cache", None)
+        st.session_state["_file_key"] = _file_key
+
+    if run_clicked:
+        progress = st.progress(0, text="분석 준비 중...")
+        _result = df.copy()
+        _datetimes = parse_datetimes(df, date_col, time_col)
+        _result["_dt_"] = _datetimes
+        _flag_cols: list[str] = []
+
+        if use_weekend:
+            progress.progress(10, text="공휴일 데이터 로드 중...")
+            kr_hols = load_kr_holidays()
+            progress.progress(25, text="주말/공휴일 탐지 중...")
+            f, r = detect_weekend_holiday(_datetimes, kr_hols)
+            _result["주말_공휴일"] = f
+            _result["주말_공휴일_사유"] = r
+            _flag_cols.append("주말_공휴일")
+
+        if use_late_night:
+            progress.progress(40, text="심야/새벽 탐지 중...")
+            if series_has_time(df, date_col, time_col):
+                f, r = detect_late_night(_datetimes, late_start, late_end)
+                _result["심야_새벽"] = f
+                _result["심야_새벽_사유"] = r
+                _flag_cols.append("심야_새벽")
+            else:
+                st.info("시간 정보가 없어 심야/새벽 탐지를 건너뜁니다.")
+
+        if use_suspicious and (merchant_col or category_col):
+            progress.progress(60, text="유흥·사치성 업종 탐지 중...")
+            f, r = detect_suspicious(df, merchant_col, category_col, suspicious_keywords)
+            _result["유흥_사치성"] = f
+            _result["유흥_사치성_사유"] = r
+            _flag_cols.append("유흥_사치성")
+
+        if use_repeat and merchant_col and amount_col:
+            progress.progress(75, text="반복거래 탐지 중...")
+            f, r = detect_repeat(df, amount_col, merchant_col, date_col, repeat_window, repeat_min)
+            _result["반복거래"] = f
+            _result["반복거래_사유"] = r
+            _flag_cols.append("반복거래")
+
+        if use_high_amount and amount_col:
+            progress.progress(85, text="고액 거래 탐지 중...")
+            f, r = detect_high_amount(df, amount_col, int(high_amount_threshold))
+            _result["고액_거래"] = f
+            _result["고액_거래_사유"] = r
+            _flag_cols.append("고액_거래")
+
+        if use_split and merchant_col:
+            progress.progress(88, text="분할결제 탐지 중...")
+            f, r = detect_split_payment(df, merchant_col, date_col, split_min)
+            _result["분할_결제"] = f
+            _result["분할_결제_사유"] = r
+            _flag_cols.append("분할_결제")
+
+        progress.progress(90, text="결과 집계 중...")
+        _result["위험점수"] = _result[_flag_cols].sum(axis=1).astype(int)
+        _result["위험등급"] = _result["위험점수"].map(
+            lambda s: "🔴 위험" if s >= 2 else ("🟡 주의" if s == 1 else "🟢 정상")
+        )
+        _reason_cols = [c for c in _result.columns if c.endswith("_사유")]
+        _result["이상사유"] = _result[_reason_cols].apply(
+            lambda row: " | ".join(v for v in row if v and str(v) not in ("", "nan")),
+            axis=1,
+        )
+        progress.progress(100, text="완료!")
+        progress.empty()
+
+        # 분석 결과를 session_state에 저장 (필터 변경 시에도 유지)
+        st.session_state["_cache"] = {
+            "result": _result,
+            "flag_cols": _flag_cols,
+            "cols": {
+                "date": date_col, "time": time_col, "amount": amount_col,
+                "merchant": merchant_col, "category": category_col,
+                "card": card_col, "user": user_col, "dept": dept_col,
+            },
+        }
+
+    if "_cache" not in st.session_state:
         return
 
-    progress = st.progress(0, text="분석 준비 중...")
-    result = df.copy()
-    datetimes = parse_datetimes(df, date_col, time_col)
-    result["_dt_"] = datetimes
-    flag_cols: list[str] = []
-
-    if use_weekend:
-        progress.progress(10, text="공휴일 데이터 로드 중...")
-        kr_hols = load_kr_holidays()
-        progress.progress(25, text="주말/공휴일 탐지 중...")
-        f, r = detect_weekend_holiday(datetimes, kr_hols)
-        result["주말_공휴일"] = f
-        result["주말_공휴일_사유"] = r
-        flag_cols.append("주말_공휴일")
-
-    if use_late_night:
-        progress.progress(40, text="심야/새벽 탐지 중...")
-        if series_has_time(df, date_col, time_col):
-            f, r = detect_late_night(datetimes, late_start, late_end)
-            result["심야_새벽"] = f
-            result["심야_새벽_사유"] = r
-            flag_cols.append("심야_새벽")
-        else:
-            st.info("시간 정보가 없어 심야/새벽 탐지를 건너뜁니다.")
-
-    if use_suspicious and (merchant_col or category_col):
-        progress.progress(60, text="유흥·사치성 업종 탐지 중...")
-        f, r = detect_suspicious(df, merchant_col, category_col, suspicious_keywords)
-        result["유흥_사치성"] = f
-        result["유흥_사치성_사유"] = r
-        flag_cols.append("유흥_사치성")
-
-    if use_repeat and merchant_col and amount_col:
-        progress.progress(75, text="반복거래 탐지 중...")
-        f, r = detect_repeat(df, amount_col, merchant_col, date_col, repeat_window, repeat_min)
-        result["반복거래"] = f
-        result["반복거래_사유"] = r
-        flag_cols.append("반복거래")
-
-    if use_high_amount and amount_col:
-        progress.progress(85, text="고액 거래 탐지 중...")
-        f, r = detect_high_amount(df, amount_col, int(high_amount_threshold))
-        result["고액_거래"] = f
-        result["고액_거래_사유"] = r
-        flag_cols.append("고액_거래")
-
-    if use_split and merchant_col:
-        progress.progress(88, text="분할결제 탐지 중...")
-        f, r = detect_split_payment(df, merchant_col, date_col, split_min)
-        result["분할_결제"] = f
-        result["분할_결제_사유"] = r
-        flag_cols.append("분할_결제")
-
-    progress.progress(90, text="결과 집계 중...")
-    result["위험점수"] = result[flag_cols].sum(axis=1).astype(int)
-    result["위험등급"] = result["위험점수"].map(
-        lambda s: "🔴 위험" if s >= 2 else ("🟡 주의" if s == 1 else "🟢 정상")
-    )
-    reason_cols = [c for c in result.columns if c.endswith("_사유")]
-    result["이상사유"] = result[reason_cols].apply(
-        lambda row: " | ".join(v for v in row if v and str(v) not in ("", "nan")),
-        axis=1,
-    )
-    progress.progress(100, text="완료!")
-    progress.empty()
+    # session_state에서 결과 복원
+    cache        = st.session_state["_cache"]
+    result       = cache["result"]
+    flag_cols    = cache["flag_cols"]
+    date_col     = cache["cols"]["date"]
+    time_col     = cache["cols"]["time"]
+    amount_col   = cache["cols"]["amount"]
+    merchant_col = cache["cols"]["merchant"]
+    category_col = cache["cols"]["category"]
+    card_col     = cache["cols"]["card"]
+    user_col     = cache["cols"]["user"]
+    dept_col     = cache["cols"]["dept"]
+    datetimes    = result["_dt_"]
 
     st.header("4️⃣ 분석 결과")
     total     = len(result)
@@ -496,26 +530,23 @@ def main():
                 amt_s = pd.to_numeric(
                     result[amount_col].astype(str).str.replace(",", ""), errors="coerce"
                 )
-                result["_amt_num_"] = amt_s
+                mask = result["위험점수"] > 0
                 user_amt = (
-                    result[result["위험점수"] > 0]
-                    .groupby(user_col)["_amt_num_"]
-                    .sum()
+                    pd.DataFrame({user_col: result.loc[mask, user_col], "_amt_": amt_s[mask]})
+                    .groupby(user_col)["_amt_"].sum()
                     .reset_index()
-                    .rename(columns={"_amt_num_": "이상금액합계"})
+                    .rename(columns={"_amt_": "이상금액합계"})
                 )
                 user_stats = user_stats.merge(user_amt, on=user_col, how="left")
                 user_stats["이상금액합계"] = user_stats["이상금액합계"].fillna(0).astype(int)
             except Exception:
                 pass
         user_stats = user_stats.sort_values("이상건수", ascending=False)
-        col_cfg = {}
-        if "이상금액합계" in user_stats.columns:
-            col_cfg["이상금액합계"] = st.column_config.NumberColumn(
-                "이상금액합계 (원)", format=",.0f"
-            )
-        st.dataframe(user_stats, use_container_width=True, hide_index=True,
-                     column_config=col_cfg if col_cfg else None)
+        # 이상금액합계 콤마 포맷 (문자열 변환으로 확실하게 표시)
+        disp_user = user_stats.copy()
+        if "이상금액합계" in disp_user.columns:
+            disp_user["이상금액합계"] = disp_user["이상금액합계"].apply(lambda x: f"{int(x):,}원")
+        st.dataframe(disp_user, use_container_width=True, hide_index=True)
 
     if dept_col:
         st.subheader("🏢 부서별 현황")
@@ -536,26 +567,22 @@ def main():
                 amt_s = pd.to_numeric(
                     result[amount_col].astype(str).str.replace(",", ""), errors="coerce"
                 )
-                result["_amt_num_"] = amt_s
+                mask = result["위험점수"] > 0
                 dept_amt = (
-                    result[result["위험점수"] > 0]
-                    .groupby(dept_col)["_amt_num_"]
-                    .sum()
+                    pd.DataFrame({dept_col: result.loc[mask, dept_col], "_amt_": amt_s[mask]})
+                    .groupby(dept_col)["_amt_"].sum()
                     .reset_index()
-                    .rename(columns={"_amt_num_": "이상금액합계"})
+                    .rename(columns={"_amt_": "이상금액합계"})
                 )
                 dept_stats = dept_stats.merge(dept_amt, on=dept_col, how="left")
                 dept_stats["이상금액합계"] = dept_stats["이상금액합계"].fillna(0).astype(int)
             except Exception:
                 pass
         dept_stats = dept_stats.sort_values("이상건수", ascending=False)
-        dept_cfg = {}
-        if "이상금액합계" in dept_stats.columns:
-            dept_cfg["이상금액합계"] = st.column_config.NumberColumn(
-                "이상금액합계 (원)", format=",.0f"
-            )
-        st.dataframe(dept_stats, use_container_width=True, hide_index=True,
-                     column_config=dept_cfg if dept_cfg else None)
+        disp_dept = dept_stats.copy()
+        if "이상금액합계" in disp_dept.columns:
+            disp_dept["이상금액합계"] = disp_dept["이상금액합계"].apply(lambda x: f"{int(x):,}원")
+        st.dataframe(disp_dept, use_container_width=True, hide_index=True)
 
     st.subheader("📋 상세 결과")
     min_dt = datetimes.dropna().dt.date.min() if datetimes.notna().any() else None
@@ -613,6 +640,7 @@ def main():
             return ["background-color: #fef9e7"] * len(row)
         return [""] * len(row)
 
+    # 금액 컬럼 콤마 포맷
     fmt = {}
     if amount_col and amount_col in show_cols:
         fmt[amount_col] = lambda x: (
@@ -627,7 +655,7 @@ def main():
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
 
     st.subheader("📥 결과 다운로드")
-    export = result.drop(columns=["_dt_", "_amt_num_"], errors="ignore")
+    export = result.drop(columns=["_dt_"], errors="ignore")
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         export.to_excel(writer, sheet_name="전체결과", index=False)
