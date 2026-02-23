@@ -42,6 +42,7 @@ FLAG_LABEL = {
     "유흥_사치성": "유흥·사치성 업종",
     "반복거래":    "반복거래",
     "고액_거래":   "고액 거래",
+    "분할_결제":   "분할결제",
 }
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers: column auto-detection
@@ -201,6 +202,27 @@ def detect_high_amount(df: pd.DataFrame, amount_col: str, threshold: int):
             flags.append(False)
             reasons.append("")
     return flags, reasons
+
+def detect_split_payment(df: pd.DataFrame, merchant_col: str, date_col: str,
+                         min_count: int = 2):
+    n = len(df)
+    flags = [False] * n
+    reasons = [""] * n
+    try:
+        work = df.copy()
+        work["_date_only_"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+        work["_merch_"]     = df[merchant_col].astype(str).str.strip()
+        work["_pos_"]       = range(n)
+        for (_, merch), grp in work.groupby(["_date_only_", "_merch_"]):
+            if len(grp) < min_count or merch in ("nan", ""):
+                continue
+            for idx in grp.index:
+                pos = work.loc[idx, "_pos_"]
+                flags[pos] = True
+                reasons[pos] = f"분할결제({len(grp)}회/동일일)"
+    except Exception:
+        pass
+    return flags, reasons
 # ─────────────────────────────────────────────────────────────────────────────
 # Main app
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,6 +261,12 @@ def main():
             st.caption(f"현재 기준: **{int(high_amount_threshold):,}원** 이상")
         else:
             high_amount_threshold = 300000
+
+        use_split = st.checkbox("분할결제 탐지", value=True)
+        if use_split:
+            split_min = st.slider("동일일 동일가맹점 최소 횟수", 2, 5, 2)
+        else:
+            split_min = 2
 
         st.divider()
         st.subheader("🔑 추가 키워드")
@@ -384,6 +412,13 @@ def main():
         result["고액_거래_사유"] = r
         flag_cols.append("고액_거래")
 
+    if use_split and merchant_col:
+        progress.progress(88, text="분할결제 탐지 중...")
+        f, r = detect_split_payment(df, merchant_col, date_col, split_min)
+        result["분할_결제"] = f
+        result["분할_결제_사유"] = r
+        flag_cols.append("분할_결제")
+
     progress.progress(90, text="결과 집계 중...")
     result["위험점수"] = result[flag_cols].sum(axis=1).astype(int)
     result["위험등급"] = result["위험점수"].map(
@@ -477,12 +512,64 @@ def main():
         col_cfg = {}
         if "이상금액합계" in user_stats.columns:
             col_cfg["이상금액합계"] = st.column_config.NumberColumn(
-                "이상금액합계 (원)", format="%,d"
+                "이상금액합계 (원)", format=",.0f"
             )
         st.dataframe(user_stats, use_container_width=True, hide_index=True,
                      column_config=col_cfg if col_cfg else None)
 
+    if dept_col:
+        st.subheader("🏢 부서별 현황")
+        dept_stats = (
+            result.groupby(dept_col)
+            .agg(
+                총거래건수=(date_col, "count"),
+                이상건수=("위험점수", lambda x: (x > 0).sum()),
+                고위험건수=("위험점수", lambda x: (x >= 2).sum()),
+            )
+            .reset_index()
+        )
+        dept_stats["이상율(%)"] = (
+            dept_stats["이상건수"] / dept_stats["총거래건수"] * 100
+        ).round(1)
+        if amount_col:
+            try:
+                amt_s = pd.to_numeric(
+                    result[amount_col].astype(str).str.replace(",", ""), errors="coerce"
+                )
+                result["_amt_num_"] = amt_s
+                dept_amt = (
+                    result[result["위험점수"] > 0]
+                    .groupby(dept_col)["_amt_num_"]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={"_amt_num_": "이상금액합계"})
+                )
+                dept_stats = dept_stats.merge(dept_amt, on=dept_col, how="left")
+                dept_stats["이상금액합계"] = dept_stats["이상금액합계"].fillna(0).astype(int)
+            except Exception:
+                pass
+        dept_stats = dept_stats.sort_values("이상건수", ascending=False)
+        dept_cfg = {}
+        if "이상금액합계" in dept_stats.columns:
+            dept_cfg["이상금액합계"] = st.column_config.NumberColumn(
+                "이상금액합계 (원)", format=",.0f"
+            )
+        st.dataframe(dept_stats, use_container_width=True, hide_index=True,
+                     column_config=dept_cfg if dept_cfg else None)
+
     st.subheader("📋 상세 결과")
+    min_dt = datetimes.dropna().dt.date.min() if datetimes.notna().any() else None
+    max_dt = datetimes.dropna().dt.date.max() if datetimes.notna().any() else None
+    if min_dt and max_dt and min_dt != max_dt:
+        date_range = st.date_input(
+            "📅 기간 필터",
+            value=(min_dt, max_dt),
+            min_value=min_dt,
+            max_value=max_dt,
+        )
+    else:
+        date_range = None
+
     fa, fb = st.columns([1, 2])
     with fa:
         show_filter = st.selectbox(
@@ -494,6 +581,11 @@ def main():
         type_filter = st.multiselect("이상징후 유형 필터", options=type_opts)
 
     display = result.copy()
+    if date_range and len(date_range) == 2:
+        display = display[
+            (display["_dt_"].dt.date >= date_range[0]) &
+            (display["_dt_"].dt.date <= date_range[1])
+        ]
     if show_filter == "이상 의심만 (주의+위험)":
         display = display[display["위험점수"] > 0]
     elif show_filter == "고위험만 (🔴 위험)":
