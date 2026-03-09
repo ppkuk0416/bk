@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from openpyxl.styles import Font, PatternFill
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,14 +17,24 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
-DATE_KEYWORDS     = ["사용일", "거래일", "승인일", "결제일", "일자", "날짜", "date"]
-TIME_KEYWORDS     = ["사용시간", "거래시간", "승인시간", "시간", "time"]
-AMOUNT_KEYWORDS   = ["승인금액", "사용금액", "거래금액", "결제금액", "금액", "amount"]
-MERCHANT_KEYWORDS = ["가맹점명", "가맹점", "상호명", "상호", "업체명", "업체", "merchant"]
-CATEGORY_KEYWORDS = ["업종명", "업종", "가맹점업종", "업태", "분류", "category"]
-CARD_KEYWORDS     = ["카드번호", "카드번", "카드", "card"]
-USER_KEYWORDS     = ["사용자명", "사용자", "카드소유자", "소유자", "성명", "이름", "사원명", "사원", "user"]
-DEPT_KEYWORDS     = ["부서명", "부서", "팀명", "팀", "department", "dept"]
+# 더존 iUERP 컬럼명을 우선순위 1순위로, 기타 일반 컬럼명 후순위
+DATE_KEYWORDS         = ["승인일자", "사용일", "거래일", "결제일", "일자", "날짜", "date"]
+TIME_KEYWORDS         = ["승인시간", "사용시간", "거래시간", "시간", "time"]
+AMOUNT_KEYWORDS       = ["승인금액", "사용금액", "거래금액", "결제금액", "금액", "amount"]
+MERCHANT_KEYWORDS     = ["가맹점명", "가맹점", "상호명", "상호", "업체명", "업체", "merchant"]
+CATEGORY_KEYWORDS     = ["업종명", "업종", "가맹점업종", "업태", "분류", "category"]
+CARD_KEYWORDS         = ["법인카드", "카드번호", "카드번", "카드", "card"]
+USER_KEYWORDS         = ["소유자", "사용자명", "사용자", "카드소유자", "성명", "이름", "사원명", "사원", "user"]
+DEPT_KEYWORDS         = ["관리부서", "부서명", "부서", "팀명", "팀", "department", "dept"]
+APPROVAL_TYPE_KEYWORDS = ["구분"]           # 승인 / 취소 구분
+BIZ_REG_KEYWORDS      = ["사업자등록번호", "사업자번호", "등록번호"]
+SUPPLY_AMT_KEYWORDS   = ["공급가액"]
+VAT_KEYWORDS          = ["부가세"]
+SERVICE_FEE_KEYWORDS  = ["봉사료"]
+APPROVAL_NO_KEYWORDS  = ["승인번호"]
+COST_CENTER_KEYWORDS  = ["코스트센터명", "코스트센터", "cost center"]
+ACCOUNT_NAME_KEYWORDS = ["상대계정명", "계정명"]
+SLIP_STATUS_KEYWORDS  = ["전표처리", "전표상태", "처리여부"]
 
 DEFAULT_SUSPICIOUS_KEYWORDS = [
     "유흥", "나이트", "클럽", "룸살롱", "단란주점", "유흥주점", "소주방",
@@ -37,12 +48,15 @@ DEFAULT_SUSPICIOUS_KEYWORDS = [
     "호스트바", "호프바",
 ]
 FLAG_LABEL = {
-    "주말_공휴일": "주말/공휴일",
-    "심야_새벽":   "심야/새벽",
-    "유흥_사치성": "유흥·사치성 업종",
-    "반복거래":    "반복거래",
-    "고액_거래":   "고액 거래",
-    "분할_결제":   "분할결제",
+    "주말_공휴일":    "주말/공휴일",
+    "심야_새벽":      "심야/새벽",
+    "유흥_사치성":    "유흥·사치성 업종",
+    "반복거래":       "반복거래",
+    "고액_거래":      "고액 거래",
+    "분할_결제":      "분할결제",
+    "사업자_다중":    "동일 사업자 다중결제",
+    "전표_미처리":    "전표 미처리",
+    "월한도_초과":    "월 한도 초과",
 }
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers: column auto-detection
@@ -58,14 +72,24 @@ def find_best_column(columns: list[str], keywords: list[str]) -> str | None:
 
 def auto_detect_columns(columns: list[str]) -> dict:
     return {
-        "date":     find_best_column(columns, DATE_KEYWORDS),
-        "time":     find_best_column(columns, TIME_KEYWORDS),
-        "amount":   find_best_column(columns, AMOUNT_KEYWORDS),
-        "merchant": find_best_column(columns, MERCHANT_KEYWORDS),
-        "category": find_best_column(columns, CATEGORY_KEYWORDS),
-        "card":     find_best_column(columns, CARD_KEYWORDS),
-        "user":     find_best_column(columns, USER_KEYWORDS),
-        "dept":     find_best_column(columns, DEPT_KEYWORDS),
+        "date":          find_best_column(columns, DATE_KEYWORDS),
+        "time":          find_best_column(columns, TIME_KEYWORDS),
+        "amount":        find_best_column(columns, AMOUNT_KEYWORDS),
+        "merchant":      find_best_column(columns, MERCHANT_KEYWORDS),
+        "category":      find_best_column(columns, CATEGORY_KEYWORDS),
+        "card":          find_best_column(columns, CARD_KEYWORDS),
+        "user":          find_best_column(columns, USER_KEYWORDS),
+        "dept":          find_best_column(columns, DEPT_KEYWORDS),
+        # 더존 iUERP 전용 컬럼
+        "approval_type": find_best_column(columns, APPROVAL_TYPE_KEYWORDS),
+        "biz_reg":       find_best_column(columns, BIZ_REG_KEYWORDS),
+        "supply_amt":    find_best_column(columns, SUPPLY_AMT_KEYWORDS),
+        "vat":           find_best_column(columns, VAT_KEYWORDS),
+        "service_fee":   find_best_column(columns, SERVICE_FEE_KEYWORDS),
+        "approval_no":   find_best_column(columns, APPROVAL_NO_KEYWORDS),
+        "cost_center":   find_best_column(columns, COST_CENTER_KEYWORDS),
+        "account_name":  find_best_column(columns, ACCOUNT_NAME_KEYWORDS),
+        "slip_status":   find_best_column(columns, SLIP_STATUS_KEYWORDS),
     }
 
 def col_index(options: list[str], value: str | None) -> int:
@@ -110,50 +134,42 @@ def load_kr_holidays() -> set[str]:
 
 def detect_weekend_holiday(datetimes: pd.Series, kr_holidays: set[str]):
     DOW = ["월", "화", "수", "목", "금", "토", "일"]
-    flags, reasons = [], []
-    for dt in datetimes:
-        if pd.isna(dt):
-            flags.append(False); reasons.append(""); continue
-        dow = dt.dayofweek
-        if dow >= 5:
-            flags.append(True); reasons.append(f"주말({DOW[dow]}요일)")
-        elif str(dt.date()) in kr_holidays:
-            flags.append(True); reasons.append("공휴일")
-        else:
-            flags.append(False); reasons.append("")
-    return flags, reasons
+    valid    = datetimes.notna()
+    dow      = datetimes.dt.dayofweek
+    date_str = datetimes.dt.date.astype(str)
+    is_weekend = valid & (dow >= 5)
+    is_holiday = valid & ~is_weekend & date_str.isin(kr_holidays)
+    reasons = pd.Series("", index=datetimes.index, dtype=str)
+    for d in (5, 6):
+        m = is_weekend & (dow == d)
+        if m.any():
+            reasons[m] = f"주말({DOW[d]}요일)"
+    reasons[is_holiday] = "공휴일"
+    return (is_weekend | is_holiday).tolist(), reasons.tolist()
 
 def detect_late_night(datetimes: pd.Series, start_h: int = 22, end_h: int = 6):
-    flags, reasons = [], []
-    for dt in datetimes:
-        if pd.isna(dt):
-            flags.append(False); reasons.append(""); continue
-        h = dt.hour
-        if h >= start_h or h < end_h:
-            flags.append(True); reasons.append(f"심야/새벽({h:02d}:{dt.minute:02d})")
-        else:
-            flags.append(False); reasons.append("")
-    return flags, reasons
+    valid   = datetimes.notna()
+    h       = datetimes.dt.hour
+    is_late = valid & ((h >= start_h) | (h < end_h))
+    reasons = pd.Series("", index=datetimes.index, dtype=str)
+    reasons[is_late] = datetimes[is_late].dt.strftime("심야/새벽(%H:%M)")
+    return is_late.tolist(), reasons.tolist()
 
 def detect_suspicious(df: pd.DataFrame, merchant_col: str | None,
                       category_col: str | None, keywords: list[str]):
-    flags, reasons = [], []
-    for i in range(len(df)):
-        found, reason = False, ""
-        for col in (category_col, merchant_col):
-            if found or col is None:
-                break
-            val = df[col].iloc[i]
-            if pd.isna(val):
-                continue
-            val_str = str(val)
-            for kw in keywords:
-                if kw in val_str:
-                    label = "업종" if col == category_col else "가맹점"
-                    found, reason = True, f"{label}주의({kw})"
-                    break
-        flags.append(found); reasons.append(reason)
-    return flags, reasons
+    if not keywords:
+        return [False] * len(df), [""] * len(df)
+    pattern = "|".join(re.escape(k) for k in keywords)
+    flags   = pd.Series(False, index=df.index)
+    reasons = pd.Series("", index=df.index, dtype=str)
+    for col, label in [(category_col, "업종"), (merchant_col, "가맹점")]:
+        if col is None:
+            continue
+        matched = df[col].astype(str).str.extract(f"({pattern})", expand=False)
+        new_hit = matched.notna() & ~flags
+        reasons[new_hit] = label + "주의(" + matched[new_hit] + ")"
+        flags |= matched.notna()
+    return flags.tolist(), reasons.tolist()
 
 def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
                   date_col: str, window_days: int = 7, min_count: int = 2):
@@ -188,20 +204,57 @@ def detect_repeat(df: pd.DataFrame, amount_col: str, merchant_col: str,
     return flags, reasons
 
 def detect_high_amount(df: pd.DataFrame, amount_col: str, threshold: int):
-    flags, reasons = [], []
-    for val in df[amount_col]:
-        try:
-            amt = float(str(val).replace(",", "").strip())
-            if amt >= threshold:
-                flags.append(True)
-                reasons.append(f"고액거래({amt:,.0f}원)")
-            else:
-                flags.append(False)
-                reasons.append("")
-        except Exception:
-            flags.append(False)
-            reasons.append("")
-    return flags, reasons
+    amt     = pd.to_numeric(df[amount_col].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
+    flags   = amt >= threshold
+    reasons = pd.Series("", index=df.index, dtype=str)
+    reasons[flags] = amt[flags].apply(lambda x: f"고액거래({x:,.0f}원)")
+    return flags.tolist(), reasons.tolist()
+
+def detect_biz_reg_multi(df: pd.DataFrame, biz_reg_col: str, merchant_col: str | None):
+    """동일 사업자등록번호로 가맹점명이 2개 이상 → 허위/중복 가맹점 의심"""
+    biz   = df[biz_reg_col].astype(str).str.strip()
+    invalid = {"", "nan", "None", "0", "-", "000-00-00000", "000000000"}
+    valid_biz = ~biz.isin(invalid) & (biz.str.replace("-", "", regex=False).str.len() >= 9)
+    flags   = pd.Series(False, index=df.index)
+    reasons = pd.Series("", index=df.index, dtype=str)
+    if not merchant_col:
+        return flags.tolist(), reasons.tolist()
+    merch = df[merchant_col].astype(str).str.strip()
+    work  = pd.DataFrame({"_biz_": biz, "_merch_": merch})
+    n_distinct = work[valid_biz].groupby("_biz_")["_merch_"].nunique()
+    distinct_map = biz.map(n_distinct).fillna(0)
+    flags   = valid_biz & (distinct_map >= 2)
+    reasons[flags] = ("동일사업자 다른가맹점(" + distinct_map[flags].astype(int).astype(str) + "개)")
+    return flags.tolist(), reasons.tolist()
+
+def detect_slip_unprocessed(df: pd.DataFrame, slip_col: str):
+    """전표처리 컬럼이 '미처리'인 행 탐지"""
+    status  = df[slip_col].astype(str).str.strip()
+    flags   = status == "미처리"
+    reasons = pd.Series("", index=df.index, dtype=str)
+    reasons[flags] = "전표미처리"
+    return flags.tolist(), reasons.tolist()
+
+def detect_monthly_limit(df: pd.DataFrame, amount_col: str, user_col: str,
+                          date_col: str, monthly_limit: int):
+    """인당 월별 승인금액 합계가 기준을 초과하는 거래 탐지"""
+    flags   = pd.Series(False, index=df.index)
+    reasons = pd.Series("", index=df.index, dtype=str)
+    try:
+        amt  = pd.to_numeric(df[amount_col].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
+        dt   = pd.to_datetime(df[date_col], errors="coerce")
+        ym   = dt.dt.to_period("M").astype(str)
+        user = df[user_col].astype(str).str.strip()
+        work = pd.DataFrame({"_user_": user, "_ym_": ym, "_amt_": amt})
+        monthly_sum = work.groupby(["_user_", "_ym_"])["_amt_"].transform("sum")
+        flags   = (monthly_sum >= monthly_limit) & dt.notna()
+        reasons[flags] = (
+            user[flags] + "/" + ym[flags] + " 월합계("
+            + monthly_sum[flags].apply(lambda x: f"{x:,.0f}원") + ")"
+        )
+    except Exception:
+        pass
+    return flags.tolist(), reasons.tolist()
 
 def detect_split_payment(df: pd.DataFrame, merchant_col: str, date_col: str,
                          min_count: int = 2):
@@ -269,6 +322,39 @@ def main():
             split_min = 2
 
         st.divider()
+        st.subheader("🏢 추가 탐지 (iUERP 전용)")
+        use_biz_reg = st.checkbox(
+            "동일 사업자번호 다중 가맹점 탐지",
+            value=True,
+            help="같은 사업자등록번호로 가맹점명이 2개 이상 → 허위/중복 가맹점 의심",
+        )
+        use_slip = st.checkbox(
+            "전표 미처리 탐지",
+            value=True,
+            help="전표처리 컬럼이 '미처리'인 거래를 탐지합니다.",
+        )
+        use_monthly_limit = st.checkbox("인당 월 한도 초과 탐지", value=False)
+        if use_monthly_limit:
+            monthly_limit = st.number_input(
+                "월 한도 기준 (원)",
+                min_value=0,
+                value=500000,
+                step=100000,
+                format="%d",
+            )
+            st.caption(f"인당 월 합계 **{int(monthly_limit):,}원** 초과 시 탐지")
+        else:
+            monthly_limit = 500000
+
+        st.divider()
+        st.subheader("🏦 더존 iUERP 옵션")
+        exclude_cancel = st.checkbox(
+            "취소 거래 제외 (구분='취소')",
+            value=True,
+            help="'구분' 컬럼이 있을 때 취소 거래를 분석에서 제외합니다.",
+        )
+
+        st.divider()
         st.subheader("🔑 추가 키워드")
         custom_kw_input = st.text_area(
             "추가 탐지 키워드 (줄바꿈 구분)",
@@ -290,18 +376,26 @@ def main():
     )
     if uploaded is None:
         st.info("👆 파일을 업로드하면 분석이 시작됩니다.")
-        with st.expander("📋 지원하는 샘플 데이터 형식"):
+        with st.expander("📋 더존 iUERP 샘플 데이터 형식"):
             sample = pd.DataFrame({
-                "사용일자":  ["2024-01-13", "2024-01-14", "2024-01-20", "2024-01-20"],
-                "사용시간":  ["10:30",      "23:15",      "14:20",      "14:20"],
-                "가맹점명":  ["스타벅스",   "강남 룸살롱", "구내식당",   "구내식당"],
-                "업종명":    ["카페",        "유흥주점",    "일반음식점", "일반음식점"],
-                "승인금액":  [6500,         350000,        15000,        15000],
-                "카드번호":  ["1234-****-****-5678"] * 4,
-                "사용자명":  ["홍길동"] * 4,
+                "법인카드":       ["42890(재무회계계정)", "42890(재무회계계정)", "55100(영업팀)", "55100(영업팀)"],
+                "관리부서":       ["재무회계팀",          "재무회계팀",          "영업1팀",       "영업1팀"],
+                "소유자":         ["홍길동",              "홍길동",              "김영희",        "김영희"],
+                "승인일자":       ["2024/01/13 10:30:00", "2024/01/14 23:15:00", "2024/01/20 14:20:00", "2024/01/20 14:45:00"],
+                "가맹점":         ["스타벅스",            "강남 룸살롱",         "구내식당",      "구내식당"],
+                "업종":           ["카페",                "유흥주점",            "일반음식점",    "일반음식점"],
+                "승인금액":       [6500,                  350000,                15000,           15000],
+                "사업자등록번호": ["123-45-67890",        "234-56-78901",        "345-67-89012",  "345-67-89012"],
+                "공급가액":       [5909,                  318182,                13636,           13636],
+                "부가세":         [591,                   31818,                 1364,            1364],
+                "봉사료":         [0,                     0,                     0,               0],
+                "승인번호":       ["11813366",            "22924477",            "33035588",      "44146699"],
+                "구분":           ["승인",                "승인",                "승인",          "승인"],
+                "상대계정명":     ["재무회계팀",          "재무회계팀",          "영업1팀",       "영업1팀"],
+                "코스트센터명":   ["본사",                "본사",                "영업본부",      "영업본부"],
             })
             st.dataframe(sample, use_container_width=True, hide_index=True)
-            st.caption("※ 컬럼명은 다양한 형태를 자동 감지합니다.")
+            st.caption("※ 더존 iUERP 내보내기 형식 기준이며, 컬럼명은 자동으로 감지됩니다.")
         return
 
     try:
@@ -337,26 +431,47 @@ def main():
     auto = auto_detect_columns(df.columns.tolist())
     opts = ["(사용 안함)"] + df.columns.tolist()
     with st.expander("컬럼 매핑 확인 / 수정", expanded=True):
+        st.caption("📌 더존 iUERP 내보내기 파일을 사용하면 자동 감지됩니다.")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("**기본 컬럼**")
             sel_date     = st.selectbox("날짜 컬럼 *",    opts, index=col_index(opts, auto["date"]))
             sel_time     = st.selectbox("시간 컬럼",      opts, index=col_index(opts, auto["time"]))
-            sel_amount   = st.selectbox("금액 컬럼",      opts, index=col_index(opts, auto["amount"]))
-            sel_merchant = st.selectbox("가맹점명 컬럼",  opts, index=col_index(opts, auto["merchant"]))
-        with c2:
+            sel_amount   = st.selectbox("승인금액 컬럼",  opts, index=col_index(opts, auto["amount"]))
+            sel_merchant = st.selectbox("가맹점 컬럼",    opts, index=col_index(opts, auto["merchant"]))
             sel_category = st.selectbox("업종 컬럼",      opts, index=col_index(opts, auto["category"]))
-            sel_card     = st.selectbox("카드번호 컬럼",  opts, index=col_index(opts, auto["card"]))
-            sel_user     = st.selectbox("사용자 컬럼",    opts, index=col_index(opts, auto["user"]))
-            sel_dept     = st.selectbox("부서 컬럼",      opts, index=col_index(opts, auto["dept"]))
+            sel_card     = st.selectbox("법인카드 컬럼",  opts, index=col_index(opts, auto["card"]))
+            sel_user     = st.selectbox("소유자 컬럼",    opts, index=col_index(opts, auto["user"]))
+            sel_dept     = st.selectbox("관리부서 컬럼",  opts, index=col_index(opts, auto["dept"]))
+        with c2:
+            st.markdown("**더존 iUERP 전용 컬럼**")
+            sel_approval_type = st.selectbox("구분 컬럼 (승인/취소)",  opts, index=col_index(opts, auto["approval_type"]))
+            sel_approval_no   = st.selectbox("승인번호 컬럼",          opts, index=col_index(opts, auto["approval_no"]))
+            sel_biz_reg       = st.selectbox("사업자등록번호 컬럼",    opts, index=col_index(opts, auto["biz_reg"]))
+            sel_supply_amt    = st.selectbox("공급가액 컬럼",          opts, index=col_index(opts, auto["supply_amt"]))
+            sel_vat           = st.selectbox("부가세 컬럼",            opts, index=col_index(opts, auto["vat"]))
+            sel_service_fee   = st.selectbox("봉사료 컬럼",            opts, index=col_index(opts, auto["service_fee"]))
+            sel_cost_center   = st.selectbox("코스트센터명 컬럼",      opts, index=col_index(opts, auto["cost_center"]))
+            sel_account_name  = st.selectbox("상대계정명 컬럼",        opts, index=col_index(opts, auto["account_name"]))
+            sel_slip_status   = st.selectbox("전표처리 컬럼",          opts, index=col_index(opts, auto["slip_status"]))
 
-    date_col     = to_none(sel_date)
-    time_col     = to_none(sel_time)
-    amount_col   = to_none(sel_amount)
-    merchant_col = to_none(sel_merchant)
-    category_col = to_none(sel_category)
-    card_col     = to_none(sel_card)
-    user_col     = to_none(sel_user)
-    dept_col     = to_none(sel_dept)
+    date_col         = to_none(sel_date)
+    time_col         = to_none(sel_time)
+    amount_col       = to_none(sel_amount)
+    merchant_col     = to_none(sel_merchant)
+    category_col     = to_none(sel_category)
+    card_col         = to_none(sel_card)
+    user_col         = to_none(sel_user)
+    dept_col         = to_none(sel_dept)
+    approval_type_col = to_none(sel_approval_type)
+    approval_no_col  = to_none(sel_approval_no)
+    biz_reg_col      = to_none(sel_biz_reg)
+    supply_amt_col   = to_none(sel_supply_amt)
+    vat_col          = to_none(sel_vat)
+    service_fee_col  = to_none(sel_service_fee)
+    cost_center_col  = to_none(sel_cost_center)
+    account_name_col = to_none(sel_account_name)
+    slip_status_col  = to_none(sel_slip_status)
 
     if not date_col:
         st.warning("날짜 컬럼을 선택해야 분석을 진행할 수 있습니다.")
@@ -374,7 +489,17 @@ def main():
     if run_clicked:
         progress = st.progress(0, text="분석 준비 중...")
         _result = df.copy()
-        _datetimes = parse_datetimes(df, date_col, time_col)
+
+        # 취소 거래 제외 (더존 iUERP '구분' 컬럼)
+        _cancelled_df = pd.DataFrame()
+        if exclude_cancel and approval_type_col and approval_type_col in _result.columns:
+            mask_cancel = _result[approval_type_col].astype(str).str.strip().isin(["취소", "취소(전체)", "CANCEL"])
+            _cancelled_df = _result[mask_cancel].copy()
+            _result = _result[~mask_cancel].reset_index(drop=True)
+        if len(_cancelled_df):
+            st.info(f"ℹ️ 취소 거래 **{len(_cancelled_df):,}건** 제외 후 분석합니다. (엑셀 내보내기 시 빨간색으로 표기)")
+        # 취소 제외 후의 _result 기준으로 datetime 파싱
+        _datetimes = parse_datetimes(_result, date_col, time_col)
         _result["_dt_"] = _datetimes
         _flag_cols: list[str] = []
 
@@ -389,7 +514,7 @@ def main():
 
         if use_late_night:
             progress.progress(40, text="심야/새벽 탐지 중...")
-            if series_has_time(df, date_col, time_col):
+            if series_has_time(_result, date_col, time_col):
                 f, r = detect_late_night(_datetimes, late_start, late_end)
                 _result["심야_새벽"] = f
                 _result["심야_새벽_사유"] = r
@@ -399,33 +524,54 @@ def main():
 
         if use_suspicious and (merchant_col or category_col):
             progress.progress(60, text="유흥·사치성 업종 탐지 중...")
-            f, r = detect_suspicious(df, merchant_col, category_col, suspicious_keywords)
+            f, r = detect_suspicious(_result, merchant_col, category_col, suspicious_keywords)
             _result["유흥_사치성"] = f
             _result["유흥_사치성_사유"] = r
             _flag_cols.append("유흥_사치성")
 
         if use_repeat and merchant_col and amount_col:
             progress.progress(75, text="반복거래 탐지 중...")
-            f, r = detect_repeat(df, amount_col, merchant_col, date_col, repeat_window, repeat_min)
+            f, r = detect_repeat(_result, amount_col, merchant_col, date_col, repeat_window, repeat_min)
             _result["반복거래"] = f
             _result["반복거래_사유"] = r
             _flag_cols.append("반복거래")
 
         if use_high_amount and amount_col:
             progress.progress(85, text="고액 거래 탐지 중...")
-            f, r = detect_high_amount(df, amount_col, int(high_amount_threshold))
+            f, r = detect_high_amount(_result, amount_col, int(high_amount_threshold))
             _result["고액_거래"] = f
             _result["고액_거래_사유"] = r
             _flag_cols.append("고액_거래")
 
         if use_split and merchant_col:
             progress.progress(88, text="분할결제 탐지 중...")
-            f, r = detect_split_payment(df, merchant_col, date_col, split_min)
+            f, r = detect_split_payment(_result, merchant_col, date_col, split_min)
             _result["분할_결제"] = f
             _result["분할_결제_사유"] = r
             _flag_cols.append("분할_결제")
 
-        progress.progress(90, text="결과 집계 중...")
+        if use_biz_reg and biz_reg_col:
+            progress.progress(91, text="동일 사업자번호 다중 가맹점 탐지 중...")
+            f, r = detect_biz_reg_multi(_result, biz_reg_col, merchant_col)
+            _result["사업자_다중"] = f
+            _result["사업자_다중_사유"] = r
+            _flag_cols.append("사업자_다중")
+
+        if use_slip and slip_status_col:
+            progress.progress(93, text="전표 미처리 탐지 중...")
+            f, r = detect_slip_unprocessed(_result, slip_status_col)
+            _result["전표_미처리"] = f
+            _result["전표_미처리_사유"] = r
+            _flag_cols.append("전표_미처리")
+
+        if use_monthly_limit and amount_col and user_col:
+            progress.progress(95, text="월 한도 초과 탐지 중...")
+            f, r = detect_monthly_limit(_result, amount_col, user_col, date_col, int(monthly_limit))
+            _result["월한도_초과"] = f
+            _result["월한도_초과_사유"] = r
+            _flag_cols.append("월한도_초과")
+
+        progress.progress(97, text="결과 집계 중...")
         _result["위험점수"] = _result[_flag_cols].sum(axis=1).astype(int)
         _result["위험등급"] = _result["위험점수"].map(
             lambda s: "🔴 위험" if s >= 2 else ("🟡 주의" if s == 1 else "🟢 정상")
@@ -441,11 +587,22 @@ def main():
         # 분석 결과를 session_state에 저장 (필터 변경 시에도 유지)
         st.session_state["_cache"] = {
             "result": _result,
+            "cancelled": _cancelled_df,
             "flag_cols": _flag_cols,
             "cols": {
                 "date": date_col, "time": time_col, "amount": amount_col,
                 "merchant": merchant_col, "category": category_col,
                 "card": card_col, "user": user_col, "dept": dept_col,
+                # 더존 iUERP 전용
+                "approval_type": approval_type_col,
+                "approval_no":   approval_no_col,
+                "biz_reg":       biz_reg_col,
+                "supply_amt":    supply_amt_col,
+                "vat":           vat_col,
+                "service_fee":   service_fee_col,
+                "cost_center":   cost_center_col,
+                "account_name":  account_name_col,
+                "slip_status":   slip_status_col,
             },
         }
 
@@ -453,18 +610,28 @@ def main():
         return
 
     # session_state에서 결과 복원
-    cache        = st.session_state["_cache"]
-    result       = cache["result"]
-    flag_cols    = cache["flag_cols"]
-    date_col     = cache["cols"]["date"]
-    time_col     = cache["cols"]["time"]
-    amount_col   = cache["cols"]["amount"]
-    merchant_col = cache["cols"]["merchant"]
-    category_col = cache["cols"]["category"]
-    card_col     = cache["cols"]["card"]
-    user_col     = cache["cols"]["user"]
-    dept_col     = cache["cols"]["dept"]
-    datetimes    = result["_dt_"]
+    cache            = st.session_state["_cache"]
+    result           = cache["result"]
+    cancelled_df     = cache.get("cancelled", pd.DataFrame())
+    flag_cols        = cache["flag_cols"]
+    date_col         = cache["cols"]["date"]
+    time_col         = cache["cols"]["time"]
+    amount_col       = cache["cols"]["amount"]
+    merchant_col     = cache["cols"]["merchant"]
+    category_col     = cache["cols"]["category"]
+    card_col         = cache["cols"]["card"]
+    user_col         = cache["cols"]["user"]
+    dept_col         = cache["cols"]["dept"]
+    approval_type_col = cache["cols"].get("approval_type")
+    approval_no_col  = cache["cols"].get("approval_no")
+    biz_reg_col      = cache["cols"].get("biz_reg")
+    supply_amt_col   = cache["cols"].get("supply_amt")
+    vat_col          = cache["cols"].get("vat")
+    service_fee_col  = cache["cols"].get("service_fee")
+    cost_center_col  = cache["cols"].get("cost_center")
+    account_name_col = cache["cols"].get("account_name")
+    slip_status_col  = cache["cols"].get("slip_status")
+    datetimes        = result["_dt_"]
 
     st.header("4️⃣ 분석 결과")
     total     = len(result)
@@ -625,47 +792,103 @@ def main():
             display = display[display[tf_cols].any(axis=1)]
 
     show_cols = ["위험등급", "이상사유"]
+    # 기본 컬럼
     for c in [date_col, time_col, user_col, dept_col, card_col,
               merchant_col, category_col, amount_col]:
+        if c:
+            show_cols.append(c)
+    # 더존 iUERP 전용 컬럼 (존재할 때만 표시)
+    for c in [approval_type_col, approval_no_col, biz_reg_col,
+              supply_amt_col, vat_col, service_fee_col,
+              cost_center_col, account_name_col, slip_status_col]:
         if c:
             show_cols.append(c)
     show_cols.append("위험점수")
     show_cols = [c for c in show_cols if c in display.columns]
 
-    def row_style(row):
-        s = row["위험점수"] if "위험점수" in row.index else 0
-        if s >= 2:
-            return ["background-color: #fde8e8"] * len(row)
-        if s == 1:
-            return ["background-color: #fef9e7"] * len(row)
-        return [""] * len(row)
+    # ── 표시 행 수 제한 (브라우저 렌더링 부담 감소) ─────────────────────────
+    MAX_ROWS = 500
+    total_display = len(display)
+    if total_display > MAX_ROWS:
+        st.warning(
+            f"⚡ 표시 건수가 많아 상위 **{MAX_ROWS:,}건**만 미리봅니다. "
+            f"(전체 {total_display:,}건은 아래 엑셀로 다운로드하세요)"
+        )
+        display = display.head(MAX_ROWS)
+
+    # ── 위험등급 컬럼만 배경색 적용 (행 전체 스타일링 대비 ~20× 빠름) ────────
+    def _grade_bg(s: pd.Series) -> list[str]:
+        return [
+            "background-color:#fde8e8" if "위험" in str(v) else
+            "background-color:#fef9e7" if "주의" in str(v) else ""
+            for v in s
+        ]
 
     # 금액 컬럼 콤마 포맷
+    _money_fmt = lambda x: (
+        f"{float(str(x).replace(',', '')):,.0f}"
+        if str(x) not in ("nan", "", "0") else "-"
+    )
     fmt = {}
-    if amount_col and amount_col in show_cols:
-        fmt[amount_col] = lambda x: (
-            f"{float(str(x).replace(',', '')):,.0f}"
-            if str(x) not in ("nan", "") else "-"
-        )
+    for _mc in [amount_col, supply_amt_col, vat_col, service_fee_col]:
+        if _mc and _mc in show_cols:
+            fmt[_mc] = _money_fmt
 
-    st.caption(f"표시 건수: {len(display):,}건")
-    styled = display[show_cols].style.apply(row_style, axis=1)
+    st.caption(f"표시 건수: {min(total_display, MAX_ROWS):,}건 / 전체 {total_display:,}건")
+    styled = display[show_cols].style.apply(_grade_bg, subset=["위험등급"])
     if fmt:
         styled = styled.format(fmt, na_rep="-")
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
 
     st.subheader("📥 결과 다운로드")
-    export = result.drop(columns=["_dt_"], errors="ignore")
+
+    # ── 내보낼 컬럼 정리: bool 플래그·개별 사유 컬럼 제거 ──────────────────
+    _drop_cols = (
+        list(flag_cols) +                                          # True/False 플래그
+        [c for c in result.columns if c.endswith("_사유")] +      # 개별 사유 (이상사유로 통합)
+        ["_dt_"]
+    )
+    export = result.drop(columns=_drop_cols, errors="ignore")
+
+    # ── 취소거래: 내보내기용 컬럼만 맞춰 준비 ────────────────────────────────
+    has_cancelled = len(cancelled_df) > 0
+    if has_cancelled:
+        _cancel_export = cancelled_df.drop(
+            columns=[c for c in _drop_cols if c in cancelled_df.columns],
+            errors="ignore",
+        )
+        # 스크리닝 결과 컬럼(없는 경우) 빈 값으로 채우기
+        for col in ["위험등급", "이상사유", "위험점수"]:
+            if col not in _cancel_export.columns:
+                _cancel_export[col] = "취소"
+        # 전체결과용: 취소행 먼저, 승인행 뒤
+        full_export = pd.concat([_cancel_export, export], ignore_index=True)
+        n_cancel_rows = len(_cancel_export)
+    else:
+        full_export = export
+        n_cancel_rows = 0
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        export.to_excel(writer, sheet_name="전체결과", index=False)
+        full_export.to_excel(writer, sheet_name="전체결과", index=False)
         export[export["위험점수"] > 0].to_excel(writer, sheet_name="이상의심", index=False)
         export[export["위험점수"] >= 2].to_excel(writer, sheet_name="고위험", index=False)
         summary = pd.DataFrame({
-            "구분": ["총 거래건수", "이상 의심 건수", "고위험 건수", "이상 비율(%)"],
-            "값":   [total, flagged, high_risk, f"{flagged/total*100:.1f}%"],
+            "구분": ["총 거래건수", "취소 거래(제외)", "이상 의심 건수", "고위험 건수", "이상 비율(%)"],
+            "값":   [total + n_cancel_rows, n_cancel_rows, flagged, high_risk,
+                     f"{flagged/total*100:.1f}%" if total else "0%"],
         })
         summary.to_excel(writer, sheet_name="요약", index=False)
+
+        # ── 취소행 빨간 글씨 적용 (전체결과 시트) ────────────────────────────
+        if n_cancel_rows > 0:
+            ws = writer.sheets["전체결과"]
+            red_font = Font(color="FF0000", bold=False)
+            # 데이터는 2행부터 시작(1행=헤더), 취소행은 n_cancel_rows행까지
+            for row in ws.iter_rows(min_row=2, max_row=n_cancel_rows + 1):
+                for cell in row:
+                    cell.font = red_font
+
     buf.seek(0)
     st.download_button(
         label="📥 분석 결과 엑셀 다운로드",
