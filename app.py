@@ -5,6 +5,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from openpyxl.styles import Font, PatternFill
+
+APP_VERSION = "v2.1"
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,7 +282,7 @@ def detect_split_payment(df: pd.DataFrame, merchant_col: str, date_col: str,
 # Main app
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
-    st.title("🔍 법인카드 이상징후 스크리닝 시스템")
+    st.title(f"🔍 법인카드 이상징후 스크리닝 시스템  `{APP_VERSION}`")
     st.caption("엑셀/CSV 파일을 업로드하면 자동으로 이상징후를 분석합니다.")
 
     with st.sidebar:
