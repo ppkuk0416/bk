@@ -16,14 +16,23 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
-DATE_KEYWORDS     = ["사용일", "거래일", "승인일", "결제일", "일자", "날짜", "date"]
-TIME_KEYWORDS     = ["사용시간", "거래시간", "승인시간", "시간", "time"]
-AMOUNT_KEYWORDS   = ["승인금액", "사용금액", "거래금액", "결제금액", "금액", "amount"]
-MERCHANT_KEYWORDS = ["가맹점명", "가맹점", "상호명", "상호", "업체명", "업체", "merchant"]
-CATEGORY_KEYWORDS = ["업종명", "업종", "가맹점업종", "업태", "분류", "category"]
-CARD_KEYWORDS     = ["카드번호", "카드번", "카드", "card"]
-USER_KEYWORDS     = ["사용자명", "사용자", "카드소유자", "소유자", "성명", "이름", "사원명", "사원", "user"]
-DEPT_KEYWORDS     = ["부서명", "부서", "팀명", "팀", "department", "dept"]
+# 더존 iUERP 컬럼명을 우선순위 1순위로, 기타 일반 컬럼명 후순위
+DATE_KEYWORDS         = ["승인일자", "사용일", "거래일", "결제일", "일자", "날짜", "date"]
+TIME_KEYWORDS         = ["승인시간", "사용시간", "거래시간", "시간", "time"]
+AMOUNT_KEYWORDS       = ["승인금액", "사용금액", "거래금액", "결제금액", "금액", "amount"]
+MERCHANT_KEYWORDS     = ["가맹점명", "가맹점", "상호명", "상호", "업체명", "업체", "merchant"]
+CATEGORY_KEYWORDS     = ["업종명", "업종", "가맹점업종", "업태", "분류", "category"]
+CARD_KEYWORDS         = ["법인카드", "카드번호", "카드번", "카드", "card"]
+USER_KEYWORDS         = ["소유자", "사용자명", "사용자", "카드소유자", "성명", "이름", "사원명", "사원", "user"]
+DEPT_KEYWORDS         = ["관리부서", "부서명", "부서", "팀명", "팀", "department", "dept"]
+APPROVAL_TYPE_KEYWORDS = ["구분"]           # 승인 / 취소 구분
+BIZ_REG_KEYWORDS      = ["사업자등록번호", "사업자번호", "등록번호"]
+SUPPLY_AMT_KEYWORDS   = ["공급가액"]
+VAT_KEYWORDS          = ["부가세"]
+SERVICE_FEE_KEYWORDS  = ["봉사료"]
+APPROVAL_NO_KEYWORDS  = ["승인번호"]
+COST_CENTER_KEYWORDS  = ["코스트센터명", "코스트센터", "cost center"]
+ACCOUNT_NAME_KEYWORDS = ["상대계정명", "계정명"]
 
 DEFAULT_SUSPICIOUS_KEYWORDS = [
     "유흥", "나이트", "클럽", "룸살롱", "단란주점", "유흥주점", "소주방",
@@ -58,14 +67,23 @@ def find_best_column(columns: list[str], keywords: list[str]) -> str | None:
 
 def auto_detect_columns(columns: list[str]) -> dict:
     return {
-        "date":     find_best_column(columns, DATE_KEYWORDS),
-        "time":     find_best_column(columns, TIME_KEYWORDS),
-        "amount":   find_best_column(columns, AMOUNT_KEYWORDS),
-        "merchant": find_best_column(columns, MERCHANT_KEYWORDS),
-        "category": find_best_column(columns, CATEGORY_KEYWORDS),
-        "card":     find_best_column(columns, CARD_KEYWORDS),
-        "user":     find_best_column(columns, USER_KEYWORDS),
-        "dept":     find_best_column(columns, DEPT_KEYWORDS),
+        "date":          find_best_column(columns, DATE_KEYWORDS),
+        "time":          find_best_column(columns, TIME_KEYWORDS),
+        "amount":        find_best_column(columns, AMOUNT_KEYWORDS),
+        "merchant":      find_best_column(columns, MERCHANT_KEYWORDS),
+        "category":      find_best_column(columns, CATEGORY_KEYWORDS),
+        "card":          find_best_column(columns, CARD_KEYWORDS),
+        "user":          find_best_column(columns, USER_KEYWORDS),
+        "dept":          find_best_column(columns, DEPT_KEYWORDS),
+        # 더존 iUERP 전용 컬럼
+        "approval_type": find_best_column(columns, APPROVAL_TYPE_KEYWORDS),
+        "biz_reg":       find_best_column(columns, BIZ_REG_KEYWORDS),
+        "supply_amt":    find_best_column(columns, SUPPLY_AMT_KEYWORDS),
+        "vat":           find_best_column(columns, VAT_KEYWORDS),
+        "service_fee":   find_best_column(columns, SERVICE_FEE_KEYWORDS),
+        "approval_no":   find_best_column(columns, APPROVAL_NO_KEYWORDS),
+        "cost_center":   find_best_column(columns, COST_CENTER_KEYWORDS),
+        "account_name":  find_best_column(columns, ACCOUNT_NAME_KEYWORDS),
     }
 
 def col_index(options: list[str], value: str | None) -> int:
@@ -269,6 +287,14 @@ def main():
             split_min = 2
 
         st.divider()
+        st.subheader("🏦 더존 iUERP 옵션")
+        exclude_cancel = st.checkbox(
+            "취소 거래 제외 (구분='취소')",
+            value=True,
+            help="'구분' 컬럼이 있을 때 취소 거래를 분석에서 제외합니다.",
+        )
+
+        st.divider()
         st.subheader("🔑 추가 키워드")
         custom_kw_input = st.text_area(
             "추가 탐지 키워드 (줄바꿈 구분)",
@@ -290,18 +316,26 @@ def main():
     )
     if uploaded is None:
         st.info("👆 파일을 업로드하면 분석이 시작됩니다.")
-        with st.expander("📋 지원하는 샘플 데이터 형식"):
+        with st.expander("📋 더존 iUERP 샘플 데이터 형식"):
             sample = pd.DataFrame({
-                "사용일자":  ["2024-01-13", "2024-01-14", "2024-01-20", "2024-01-20"],
-                "사용시간":  ["10:30",      "23:15",      "14:20",      "14:20"],
-                "가맹점명":  ["스타벅스",   "강남 룸살롱", "구내식당",   "구내식당"],
-                "업종명":    ["카페",        "유흥주점",    "일반음식점", "일반음식점"],
-                "승인금액":  [6500,         350000,        15000,        15000],
-                "카드번호":  ["1234-****-****-5678"] * 4,
-                "사용자명":  ["홍길동"] * 4,
+                "법인카드":       ["42890(재무회계계정)", "42890(재무회계계정)", "55100(영업팀)", "55100(영업팀)"],
+                "관리부서":       ["재무회계팀",          "재무회계팀",          "영업1팀",       "영업1팀"],
+                "소유자":         ["홍길동",              "홍길동",              "김영희",        "김영희"],
+                "승인일자":       ["2024/01/13 10:30:00", "2024/01/14 23:15:00", "2024/01/20 14:20:00", "2024/01/20 14:45:00"],
+                "가맹점":         ["스타벅스",            "강남 룸살롱",         "구내식당",      "구내식당"],
+                "업종":           ["카페",                "유흥주점",            "일반음식점",    "일반음식점"],
+                "승인금액":       [6500,                  350000,                15000,           15000],
+                "사업자등록번호": ["123-45-67890",        "234-56-78901",        "345-67-89012",  "345-67-89012"],
+                "공급가액":       [5909,                  318182,                13636,           13636],
+                "부가세":         [591,                   31818,                 1364,            1364],
+                "봉사료":         [0,                     0,                     0,               0],
+                "승인번호":       ["11813366",            "22924477",            "33035588",      "44146699"],
+                "구분":           ["승인",                "승인",                "승인",          "승인"],
+                "상대계정명":     ["재무회계팀",          "재무회계팀",          "영업1팀",       "영업1팀"],
+                "코스트센터명":   ["본사",                "본사",                "영업본부",      "영업본부"],
             })
             st.dataframe(sample, use_container_width=True, hide_index=True)
-            st.caption("※ 컬럼명은 다양한 형태를 자동 감지합니다.")
+            st.caption("※ 더존 iUERP 내보내기 형식 기준이며, 컬럼명은 자동으로 감지됩니다.")
         return
 
     try:
@@ -337,26 +371,45 @@ def main():
     auto = auto_detect_columns(df.columns.tolist())
     opts = ["(사용 안함)"] + df.columns.tolist()
     with st.expander("컬럼 매핑 확인 / 수정", expanded=True):
+        st.caption("📌 더존 iUERP 내보내기 파일을 사용하면 자동 감지됩니다.")
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("**기본 컬럼**")
             sel_date     = st.selectbox("날짜 컬럼 *",    opts, index=col_index(opts, auto["date"]))
             sel_time     = st.selectbox("시간 컬럼",      opts, index=col_index(opts, auto["time"]))
-            sel_amount   = st.selectbox("금액 컬럼",      opts, index=col_index(opts, auto["amount"]))
-            sel_merchant = st.selectbox("가맹점명 컬럼",  opts, index=col_index(opts, auto["merchant"]))
-        with c2:
+            sel_amount   = st.selectbox("승인금액 컬럼",  opts, index=col_index(opts, auto["amount"]))
+            sel_merchant = st.selectbox("가맹점 컬럼",    opts, index=col_index(opts, auto["merchant"]))
             sel_category = st.selectbox("업종 컬럼",      opts, index=col_index(opts, auto["category"]))
-            sel_card     = st.selectbox("카드번호 컬럼",  opts, index=col_index(opts, auto["card"]))
-            sel_user     = st.selectbox("사용자 컬럼",    opts, index=col_index(opts, auto["user"]))
-            sel_dept     = st.selectbox("부서 컬럼",      opts, index=col_index(opts, auto["dept"]))
+            sel_card     = st.selectbox("법인카드 컬럼",  opts, index=col_index(opts, auto["card"]))
+            sel_user     = st.selectbox("소유자 컬럼",    opts, index=col_index(opts, auto["user"]))
+            sel_dept     = st.selectbox("관리부서 컬럼",  opts, index=col_index(opts, auto["dept"]))
+        with c2:
+            st.markdown("**더존 iUERP 전용 컬럼**")
+            sel_approval_type = st.selectbox("구분 컬럼 (승인/취소)",  opts, index=col_index(opts, auto["approval_type"]))
+            sel_approval_no   = st.selectbox("승인번호 컬럼",          opts, index=col_index(opts, auto["approval_no"]))
+            sel_biz_reg       = st.selectbox("사업자등록번호 컬럼",    opts, index=col_index(opts, auto["biz_reg"]))
+            sel_supply_amt    = st.selectbox("공급가액 컬럼",          opts, index=col_index(opts, auto["supply_amt"]))
+            sel_vat           = st.selectbox("부가세 컬럼",            opts, index=col_index(opts, auto["vat"]))
+            sel_service_fee   = st.selectbox("봉사료 컬럼",            opts, index=col_index(opts, auto["service_fee"]))
+            sel_cost_center   = st.selectbox("코스트센터명 컬럼",      opts, index=col_index(opts, auto["cost_center"]))
+            sel_account_name  = st.selectbox("상대계정명 컬럼",        opts, index=col_index(opts, auto["account_name"]))
 
-    date_col     = to_none(sel_date)
-    time_col     = to_none(sel_time)
-    amount_col   = to_none(sel_amount)
-    merchant_col = to_none(sel_merchant)
-    category_col = to_none(sel_category)
-    card_col     = to_none(sel_card)
-    user_col     = to_none(sel_user)
-    dept_col     = to_none(sel_dept)
+    date_col         = to_none(sel_date)
+    time_col         = to_none(sel_time)
+    amount_col       = to_none(sel_amount)
+    merchant_col     = to_none(sel_merchant)
+    category_col     = to_none(sel_category)
+    card_col         = to_none(sel_card)
+    user_col         = to_none(sel_user)
+    dept_col         = to_none(sel_dept)
+    approval_type_col = to_none(sel_approval_type)
+    approval_no_col  = to_none(sel_approval_no)
+    biz_reg_col      = to_none(sel_biz_reg)
+    supply_amt_col   = to_none(sel_supply_amt)
+    vat_col          = to_none(sel_vat)
+    service_fee_col  = to_none(sel_service_fee)
+    cost_center_col  = to_none(sel_cost_center)
+    account_name_col = to_none(sel_account_name)
 
     if not date_col:
         st.warning("날짜 컬럼을 선택해야 분석을 진행할 수 있습니다.")
@@ -374,6 +427,15 @@ def main():
     if run_clicked:
         progress = st.progress(0, text="분석 준비 중...")
         _result = df.copy()
+
+        # 취소 거래 제외 (더존 iUERP '구분' 컬럼)
+        _excluded_cancel = 0
+        if exclude_cancel and approval_type_col and approval_type_col in _result.columns:
+            mask_cancel = _result[approval_type_col].astype(str).str.strip().isin(["취소", "취소(전체)", "CANCEL"])
+            _excluded_cancel = int(mask_cancel.sum())
+            _result = _result[~mask_cancel].reset_index(drop=True)
+        if _excluded_cancel:
+            st.info(f"ℹ️ 취소 거래 **{_excluded_cancel:,}건** 제외 후 분석합니다.")
         _datetimes = parse_datetimes(df, date_col, time_col)
         _result["_dt_"] = _datetimes
         _flag_cols: list[str] = []
@@ -446,6 +508,15 @@ def main():
                 "date": date_col, "time": time_col, "amount": amount_col,
                 "merchant": merchant_col, "category": category_col,
                 "card": card_col, "user": user_col, "dept": dept_col,
+                # 더존 iUERP 전용
+                "approval_type": approval_type_col,
+                "approval_no":   approval_no_col,
+                "biz_reg":       biz_reg_col,
+                "supply_amt":    supply_amt_col,
+                "vat":           vat_col,
+                "service_fee":   service_fee_col,
+                "cost_center":   cost_center_col,
+                "account_name":  account_name_col,
             },
         }
 
@@ -453,18 +524,26 @@ def main():
         return
 
     # session_state에서 결과 복원
-    cache        = st.session_state["_cache"]
-    result       = cache["result"]
-    flag_cols    = cache["flag_cols"]
-    date_col     = cache["cols"]["date"]
-    time_col     = cache["cols"]["time"]
-    amount_col   = cache["cols"]["amount"]
-    merchant_col = cache["cols"]["merchant"]
-    category_col = cache["cols"]["category"]
-    card_col     = cache["cols"]["card"]
-    user_col     = cache["cols"]["user"]
-    dept_col     = cache["cols"]["dept"]
-    datetimes    = result["_dt_"]
+    cache            = st.session_state["_cache"]
+    result           = cache["result"]
+    flag_cols        = cache["flag_cols"]
+    date_col         = cache["cols"]["date"]
+    time_col         = cache["cols"]["time"]
+    amount_col       = cache["cols"]["amount"]
+    merchant_col     = cache["cols"]["merchant"]
+    category_col     = cache["cols"]["category"]
+    card_col         = cache["cols"]["card"]
+    user_col         = cache["cols"]["user"]
+    dept_col         = cache["cols"]["dept"]
+    approval_type_col = cache["cols"].get("approval_type")
+    approval_no_col  = cache["cols"].get("approval_no")
+    biz_reg_col      = cache["cols"].get("biz_reg")
+    supply_amt_col   = cache["cols"].get("supply_amt")
+    vat_col          = cache["cols"].get("vat")
+    service_fee_col  = cache["cols"].get("service_fee")
+    cost_center_col  = cache["cols"].get("cost_center")
+    account_name_col = cache["cols"].get("account_name")
+    datetimes        = result["_dt_"]
 
     st.header("4️⃣ 분석 결과")
     total     = len(result)
@@ -625,8 +704,15 @@ def main():
             display = display[display[tf_cols].any(axis=1)]
 
     show_cols = ["위험등급", "이상사유"]
+    # 기본 컬럼
     for c in [date_col, time_col, user_col, dept_col, card_col,
               merchant_col, category_col, amount_col]:
+        if c:
+            show_cols.append(c)
+    # 더존 iUERP 전용 컬럼 (존재할 때만 표시)
+    for c in [approval_type_col, approval_no_col, biz_reg_col,
+              supply_amt_col, vat_col, service_fee_col,
+              cost_center_col, account_name_col]:
         if c:
             show_cols.append(c)
     show_cols.append("위험점수")
@@ -640,13 +726,15 @@ def main():
             return ["background-color: #fef9e7"] * len(row)
         return [""] * len(row)
 
-    # 금액 컬럼 콤마 포맷
+    # 금액 컬럼 콤마 포맷 (승인금액 + iUERP 공급가액/부가세/봉사료)
+    _money_fmt = lambda x: (
+        f"{float(str(x).replace(',', '')):,.0f}"
+        if str(x) not in ("nan", "", "0") else "-"
+    )
     fmt = {}
-    if amount_col and amount_col in show_cols:
-        fmt[amount_col] = lambda x: (
-            f"{float(str(x).replace(',', '')):,.0f}"
-            if str(x) not in ("nan", "") else "-"
-        )
+    for _mc in [amount_col, supply_amt_col, vat_col, service_fee_col]:
+        if _mc and _mc in show_cols:
+            fmt[_mc] = _money_fmt
 
     st.caption(f"표시 건수: {len(display):,}건")
     styled = display[show_cols].style.apply(row_style, axis=1)
