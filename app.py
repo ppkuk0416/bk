@@ -838,7 +838,9 @@ def main():
             fmt[_mc] = _money_fmt
 
     st.caption(f"표시 건수: {min(total_display, MAX_ROWS):,}건 / 전체 {total_display:,}건")
-    styled = display[show_cols].style.apply(_grade_bg, subset=["위험등급"])
+    styled = display[show_cols].style
+    if "위험등급" in show_cols:
+        styled = styled.apply(_grade_bg, subset=["위험등급"])
     if fmt:
         styled = styled.format(fmt, na_rep="-")
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
