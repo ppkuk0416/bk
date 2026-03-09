@@ -34,6 +34,7 @@ SERVICE_FEE_KEYWORDS  = ["봉사료"]
 APPROVAL_NO_KEYWORDS  = ["승인번호"]
 COST_CENTER_KEYWORDS  = ["코스트센터명", "코스트센터", "cost center"]
 ACCOUNT_NAME_KEYWORDS = ["상대계정명", "계정명"]
+SLIP_STATUS_KEYWORDS  = ["전표처리", "전표상태", "처리여부"]
 
 DEFAULT_SUSPICIOUS_KEYWORDS = [
     "유흥", "나이트", "클럽", "룸살롱", "단란주점", "유흥주점", "소주방",
@@ -47,12 +48,15 @@ DEFAULT_SUSPICIOUS_KEYWORDS = [
     "호스트바", "호프바",
 ]
 FLAG_LABEL = {
-    "주말_공휴일": "주말/공휴일",
-    "심야_새벽":   "심야/새벽",
-    "유흥_사치성": "유흥·사치성 업종",
-    "반복거래":    "반복거래",
-    "고액_거래":   "고액 거래",
-    "분할_결제":   "분할결제",
+    "주말_공휴일":    "주말/공휴일",
+    "심야_새벽":      "심야/새벽",
+    "유흥_사치성":    "유흥·사치성 업종",
+    "반복거래":       "반복거래",
+    "고액_거래":      "고액 거래",
+    "분할_결제":      "분할결제",
+    "사업자_다중":    "동일 사업자 다중결제",
+    "전표_미처리":    "전표 미처리",
+    "월한도_초과":    "월 한도 초과",
 }
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers: column auto-detection
@@ -85,6 +89,7 @@ def auto_detect_columns(columns: list[str]) -> dict:
         "approval_no":   find_best_column(columns, APPROVAL_NO_KEYWORDS),
         "cost_center":   find_best_column(columns, COST_CENTER_KEYWORDS),
         "account_name":  find_best_column(columns, ACCOUNT_NAME_KEYWORDS),
+        "slip_status":   find_best_column(columns, SLIP_STATUS_KEYWORDS),
     }
 
 def col_index(options: list[str], value: str | None) -> int:
@@ -205,6 +210,52 @@ def detect_high_amount(df: pd.DataFrame, amount_col: str, threshold: int):
     reasons[flags] = amt[flags].apply(lambda x: f"고액거래({x:,.0f}원)")
     return flags.tolist(), reasons.tolist()
 
+def detect_biz_reg_multi(df: pd.DataFrame, biz_reg_col: str, merchant_col: str | None):
+    """동일 사업자등록번호로 가맹점명이 2개 이상 → 허위/중복 가맹점 의심"""
+    biz   = df[biz_reg_col].astype(str).str.strip()
+    invalid = {"", "nan", "None", "0", "-", "000-00-00000", "000000000"}
+    valid_biz = ~biz.isin(invalid) & (biz.str.replace("-", "", regex=False).str.len() >= 9)
+    flags   = pd.Series(False, index=df.index)
+    reasons = pd.Series("", index=df.index, dtype=str)
+    if not merchant_col:
+        return flags.tolist(), reasons.tolist()
+    merch = df[merchant_col].astype(str).str.strip()
+    work  = pd.DataFrame({"_biz_": biz, "_merch_": merch})
+    n_distinct = work[valid_biz].groupby("_biz_")["_merch_"].nunique()
+    distinct_map = biz.map(n_distinct).fillna(0)
+    flags   = valid_biz & (distinct_map >= 2)
+    reasons[flags] = ("동일사업자 다른가맹점(" + distinct_map[flags].astype(int).astype(str) + "개)")
+    return flags.tolist(), reasons.tolist()
+
+def detect_slip_unprocessed(df: pd.DataFrame, slip_col: str):
+    """전표처리 컬럼이 '미처리'인 행 탐지"""
+    status  = df[slip_col].astype(str).str.strip()
+    flags   = status == "미처리"
+    reasons = pd.Series("", index=df.index, dtype=str)
+    reasons[flags] = "전표미처리"
+    return flags.tolist(), reasons.tolist()
+
+def detect_monthly_limit(df: pd.DataFrame, amount_col: str, user_col: str,
+                          date_col: str, monthly_limit: int):
+    """인당 월별 승인금액 합계가 기준을 초과하는 거래 탐지"""
+    flags   = pd.Series(False, index=df.index)
+    reasons = pd.Series("", index=df.index, dtype=str)
+    try:
+        amt  = pd.to_numeric(df[amount_col].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
+        dt   = pd.to_datetime(df[date_col], errors="coerce")
+        ym   = dt.dt.to_period("M").astype(str)
+        user = df[user_col].astype(str).str.strip()
+        work = pd.DataFrame({"_user_": user, "_ym_": ym, "_amt_": amt})
+        monthly_sum = work.groupby(["_user_", "_ym_"])["_amt_"].transform("sum")
+        flags   = (monthly_sum >= monthly_limit) & dt.notna()
+        reasons[flags] = (
+            user[flags] + "/" + ym[flags] + " 월합계("
+            + monthly_sum[flags].apply(lambda x: f"{x:,.0f}원") + ")"
+        )
+    except Exception:
+        pass
+    return flags.tolist(), reasons.tolist()
+
 def detect_split_payment(df: pd.DataFrame, merchant_col: str, date_col: str,
                          min_count: int = 2):
     n = len(df)
@@ -269,6 +320,31 @@ def main():
             split_min = st.slider("동일일 동일가맹점 최소 횟수", 2, 5, 2)
         else:
             split_min = 2
+
+        st.divider()
+        st.subheader("🏢 추가 탐지 (iUERP 전용)")
+        use_biz_reg = st.checkbox(
+            "동일 사업자번호 다중 가맹점 탐지",
+            value=True,
+            help="같은 사업자등록번호로 가맹점명이 2개 이상 → 허위/중복 가맹점 의심",
+        )
+        use_slip = st.checkbox(
+            "전표 미처리 탐지",
+            value=True,
+            help="전표처리 컬럼이 '미처리'인 거래를 탐지합니다.",
+        )
+        use_monthly_limit = st.checkbox("인당 월 한도 초과 탐지", value=False)
+        if use_monthly_limit:
+            monthly_limit = st.number_input(
+                "월 한도 기준 (원)",
+                min_value=0,
+                value=500000,
+                step=100000,
+                format="%d",
+            )
+            st.caption(f"인당 월 합계 **{int(monthly_limit):,}원** 초과 시 탐지")
+        else:
+            monthly_limit = 500000
 
         st.divider()
         st.subheader("🏦 더존 iUERP 옵션")
@@ -377,6 +453,7 @@ def main():
             sel_service_fee   = st.selectbox("봉사료 컬럼",            opts, index=col_index(opts, auto["service_fee"]))
             sel_cost_center   = st.selectbox("코스트센터명 컬럼",      opts, index=col_index(opts, auto["cost_center"]))
             sel_account_name  = st.selectbox("상대계정명 컬럼",        opts, index=col_index(opts, auto["account_name"]))
+            sel_slip_status   = st.selectbox("전표처리 컬럼",          opts, index=col_index(opts, auto["slip_status"]))
 
     date_col         = to_none(sel_date)
     time_col         = to_none(sel_time)
@@ -394,6 +471,7 @@ def main():
     service_fee_col  = to_none(sel_service_fee)
     cost_center_col  = to_none(sel_cost_center)
     account_name_col = to_none(sel_account_name)
+    slip_status_col  = to_none(sel_slip_status)
 
     if not date_col:
         st.warning("날짜 컬럼을 선택해야 분석을 진행할 수 있습니다.")
@@ -472,7 +550,28 @@ def main():
             _result["분할_결제_사유"] = r
             _flag_cols.append("분할_결제")
 
-        progress.progress(90, text="결과 집계 중...")
+        if use_biz_reg and biz_reg_col:
+            progress.progress(91, text="동일 사업자번호 다중 가맹점 탐지 중...")
+            f, r = detect_biz_reg_multi(_result, biz_reg_col, merchant_col)
+            _result["사업자_다중"] = f
+            _result["사업자_다중_사유"] = r
+            _flag_cols.append("사업자_다중")
+
+        if use_slip and slip_status_col:
+            progress.progress(93, text="전표 미처리 탐지 중...")
+            f, r = detect_slip_unprocessed(_result, slip_status_col)
+            _result["전표_미처리"] = f
+            _result["전표_미처리_사유"] = r
+            _flag_cols.append("전표_미처리")
+
+        if use_monthly_limit and amount_col and user_col:
+            progress.progress(95, text="월 한도 초과 탐지 중...")
+            f, r = detect_monthly_limit(_result, amount_col, user_col, date_col, int(monthly_limit))
+            _result["월한도_초과"] = f
+            _result["월한도_초과_사유"] = r
+            _flag_cols.append("월한도_초과")
+
+        progress.progress(97, text="결과 집계 중...")
         _result["위험점수"] = _result[_flag_cols].sum(axis=1).astype(int)
         _result["위험등급"] = _result["위험점수"].map(
             lambda s: "🔴 위험" if s >= 2 else ("🟡 주의" if s == 1 else "🟢 정상")
@@ -503,6 +602,7 @@ def main():
                 "service_fee":   service_fee_col,
                 "cost_center":   cost_center_col,
                 "account_name":  account_name_col,
+                "slip_status":   slip_status_col,
             },
         }
 
@@ -530,6 +630,7 @@ def main():
     service_fee_col  = cache["cols"].get("service_fee")
     cost_center_col  = cache["cols"].get("cost_center")
     account_name_col = cache["cols"].get("account_name")
+    slip_status_col  = cache["cols"].get("slip_status")
     datetimes        = result["_dt_"]
 
     st.header("4️⃣ 분석 결과")
@@ -699,7 +800,7 @@ def main():
     # 더존 iUERP 전용 컬럼 (존재할 때만 표시)
     for c in [approval_type_col, approval_no_col, biz_reg_col,
               supply_amt_col, vat_col, service_fee_col,
-              cost_center_col, account_name_col]:
+              cost_center_col, account_name_col, slip_status_col]:
         if c:
             show_cols.append(c)
     show_cols.append("위험점수")
