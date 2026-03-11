@@ -2,7 +2,6 @@ import io
 import re
 from pathlib import Path
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -595,56 +594,49 @@ def main():
     vat_col_    = cols["vat"]
     dts         = result["_dt_"]
 
-    # ── 요약 지표 ──────────────────────────────────────────────────────────────
+    # ── 엑셀 다운로드 ─────────────────────────────────────────────────────────
     st.header("4️⃣ 분석 결과")
-    total   = len(result)
-    flagged = int((result["위험점수"] > 0).sum())
-    high    = int((result["위험점수"] >= 2).sum())
-    m1,m2,m3,m4 = st.columns(4)
-    m1.metric("총 거래건수", f"{total:,}건")
-    m2.metric("이상 의심", f"{flagged:,}건", f"{flagged/total*100:.1f}%" if total else "0%")
-    m3.metric("고위험", f"{high:,}건")
-    if amount_col:
-        try:
-            amt = pd.to_numeric(result[amount_col].astype(str).str.replace(",",""), errors="coerce")
-            m4.metric("이상 의심 금액합계", f"{amt[result['위험점수']>0].sum():,.0f}원")
-        except Exception:
-            m4.metric("이상 의심 금액합계", "-")
 
-    # ── 차트 ──────────────────────────────────────────────────────────────────
-    if flag_cols:
-        ch1, ch2 = st.columns(2)
-        with ch1:
-            cnt = pd.DataFrame({
-                "항목": [FLAG_LABEL.get(c,c) for c in flag_cols],
-                "건수": [int(result[c].sum()) for c in flag_cols],
-            })
-            fig = px.bar(cnt, x="항목", y="건수", title="이상징후 유형별 건수",
-                         color="건수", color_continuous_scale="Reds", text="건수")
-            fig.update_traces(textposition="outside")
-            fig.update_layout(showlegend=False, coloraxis_showscale=False)
-            st.plotly_chart(fig, use_container_width=True)
-        with ch2:
-            rc = result["위험등급"].value_counts().reset_index()
-            rc.columns = ["등급","건수"]
-            fig2 = px.pie(rc, names="등급", values="건수", title="위험등급 분포",
-                          color="등급",
-                          color_discrete_map={"🔴 위험":"#e74c3c","🟡 주의":"#f39c12","🟢 정상":"#2ecc71"})
-            st.plotly_chart(fig2, use_container_width=True)
+    drop = (list(flag_cols)
+            + [c for c in result.columns if c.endswith("_사유")]
+            + ["_dt_"])
+    export = result.drop(columns=drop, errors="ignore")
 
-    # 사용자별/부서별 현황
-    for grp_col, label in [(user_col,"👤 소유자별 현황"), (dept_col,"🏢 부서별 현황")]:
-        if not grp_col:
-            continue
-        st.subheader(label)
-        gs = (result.groupby(grp_col)
-              .agg(총거래건수=(date_col,"count"),
-                   이상건수=("위험점수", lambda x:(x>0).sum()),
-                   고위험건수=("위험점수", lambda x:(x>=2).sum()))
-              .reset_index())
-        gs["이상율(%)"] = (gs["이상건수"]/gs["총거래건수"]*100).round(1)
-        st.dataframe(gs.sort_values("이상건수",ascending=False),
-                     use_container_width=True, hide_index=True)
+    if len(cancel_df) > 0:
+        cexp = cancel_df.drop(columns=[c for c in drop if c in cancel_df.columns], errors="ignore")
+        for col in ["위험등급","이상사유","위험점수"]:
+            if col not in cexp.columns:
+                cexp[col] = "취소"
+    else:
+        cexp = pd.DataFrame()
+
+    desired = [
+        dept_col, user_col, date_col, time_col,
+        memo_col, acct_col, merchant_col, category_col, amount_col,
+        supply_col, vat_col_,
+        "이상사유", "위험등급",
+    ]
+    seen: set = set()
+    ecols: list = []
+    for c in desired:
+        if c and c in export.columns and c not in seen:
+            ecols.append(c); seen.add(c)
+    skip = set(drop) | {"위험점수"}
+    for c in export.columns:
+        if c not in seen and c not in skip:
+            ecols.append(c); seen.add(c)
+
+    buf = io.BytesIO()
+    write_grouped_excel(buf, export, cexp, user_col, amount_col,
+                        supply_col, vat_col_, ecols)
+    buf.seek(0)
+    st.download_button(
+        label="📥 분석 결과 엑셀 다운로드",
+        data=buf.getvalue(),
+        file_name=f"{Path(uploaded.name).stem}_스크리닝.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
 
     # ── 상세 결과 테이블 ───────────────────────────────────────────────────────
     st.subheader("📋 상세 결과")
@@ -706,52 +698,6 @@ def main():
         )
     st.caption(f"표시 {min(total_disp,MAX_ROWS):,}건 / 전체 {total_disp:,}건")
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
-
-    # ── 엑셀 다운로드 ─────────────────────────────────────────────────────────
-    st.subheader("📥 결과 다운로드")
-
-    drop = (list(flag_cols)
-            + [c for c in result.columns if c.endswith("_사유")]
-            + ["_dt_"])
-    export = result.drop(columns=drop, errors="ignore")
-
-    # 취소 거래 준비
-    if len(cancel_df) > 0:
-        cexp = cancel_df.drop(columns=[c for c in drop if c in cancel_df.columns], errors="ignore")
-        for col in ["위험등급","이상사유","위험점수"]:
-            if col not in cexp.columns:
-                cexp[col] = "취소"
-    else:
-        cexp = pd.DataFrame()
-
-    # 엑셀 컬럼 순서: 9개 핵심 → 보조 → 이상사유 → 위험등급
-    desired = [
-        dept_col, user_col, date_col, time_col,
-        memo_col, acct_col, merchant_col, category_col, amount_col,
-        supply_col, vat_col_,
-        "이상사유", "위험등급",
-    ]
-    seen: set = set()
-    ecols: list = []
-    for c in desired:
-        if c and c in export.columns and c not in seen:
-            ecols.append(c); seen.add(c)
-    skip = set(drop) | {"위험점수"}
-    for c in export.columns:
-        if c not in seen and c not in skip:
-            ecols.append(c); seen.add(c)
-
-    buf = io.BytesIO()
-    write_grouped_excel(buf, export, cexp, user_col, amount_col,
-                        supply_col, vat_col_, ecols)
-    buf.seek(0)
-    st.download_button(
-        label="📥 분석 결과 엑셀 다운로드",
-        data=buf.getvalue(),
-        file_name=f"{Path(uploaded.name).stem}_스크리닝.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
 
 if __name__ == "__main__":
     main()
