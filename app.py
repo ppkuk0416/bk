@@ -368,11 +368,26 @@ def main():
                     df = pd.read_csv(uploaded, encoding=enc); uploaded.seek(0); break
                 except UnicodeDecodeError:
                     uploaded.seek(0)
-        else:
-            xl = pd.ExcelFile(uploaded)
+        elif uploaded.name.lower().endswith(".xls"):
+            xl = pd.ExcelFile(uploaded, engine="xlrd")
             sheet = (st.selectbox("시트 선택", xl.sheet_names)
                      if len(xl.sheet_names) > 1 else xl.sheet_names[0])
-            df = pd.read_excel(uploaded, sheet_name=sheet)
+            df = pd.read_excel(uploaded, sheet_name=sheet, engine="xlrd")
+        else:
+            # xlsx: openpyxl 시도 → 실패 시 xlrd 폴백
+            try:
+                uploaded.seek(0)
+                xl = pd.ExcelFile(uploaded, engine="openpyxl")
+                sheet = (st.selectbox("시트 선택", xl.sheet_names)
+                         if len(xl.sheet_names) > 1 else xl.sheet_names[0])
+                uploaded.seek(0)
+                df = pd.read_excel(uploaded, sheet_name=sheet, engine="openpyxl")
+            except Exception:
+                uploaded.seek(0)
+                xl = pd.ExcelFile(uploaded, engine="xlrd")
+                sheet = xl.sheet_names[0]
+                uploaded.seek(0)
+                df = pd.read_excel(uploaded, sheet_name=sheet, engine="xlrd")
     except Exception as e:
         st.error(f"파일 읽기 오류: {e}"); return
 
