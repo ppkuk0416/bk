@@ -97,10 +97,17 @@ def parse_dt(df, date_col, time_col):
     try:
         dates = pd.to_datetime(df[date_col], errors="coerce")
         if time_col and time_col in df.columns:
+            t = df[time_col].astype(str).str.strip()
+            # HHMMSS(6자리 숫자) → HH:MM:SS 변환 (예: 152541 → 15:25:41)
+            if t.dropna().head(20).str.match(r"^\d{6}$").any():
+                t = t.str.replace(r"^(\d{2})(\d{2})(\d{2})$", r"\1:\2:\3", regex=True)
+            # HHMM(4자리) → HH:MM 변환 (예: 1525 → 15:25)
+            elif t.dropna().head(20).str.match(r"^\d{4}$").any():
+                t = t.str.replace(r"^(\d{2})(\d{2})$", r"\1:\2", regex=True)
             combined = pd.to_datetime(
-                df[date_col].astype(str) + " " + df[time_col].astype(str), errors="coerce"
+                df[date_col].astype(str) + " " + t, errors="coerce"
             )
-            # 결합 파싱이 날짜 단독보다 NaT가 많으면(시간 형식 불일치) 날짜만 사용
+            # 결합 파싱이 날짜 단독보다 NaT가 많으면 날짜만 사용
             if combined.notna().sum() >= dates.notna().sum():
                 return combined
         return dates
@@ -108,8 +115,14 @@ def parse_dt(df, date_col, time_col):
         return pd.Series([pd.NaT] * len(df), index=df.index)
 
 def has_time(df, date_col, time_col):
-    if time_col:
-        return True
+    """시간 정보가 실제로 파싱 가능한지 확인 (컬럼 존재만으로 판단 X)"""
+    if time_col and time_col in df.columns:
+        sample = df[time_col].astype(str).str.strip().dropna().head(20)
+        # HHMMSS(6자리), HHMM(4자리), 또는 HH:MM 형식
+        return bool(
+            sample.str.match(r"^\d{4,6}$").any() or
+            sample.str.contains(r"\d{1,2}:\d{2}", regex=True).any()
+        )
     try:
         return bool(df[date_col].astype(str).dropna().head(20)
                     .str.contains(r"\d{2}:\d{2}", regex=True).any())
@@ -172,21 +185,31 @@ def detect_high_amount(df, amount_col, threshold):
     reasons[flags] = amt[flags].apply(lambda x: f"고액거래({x:,.0f}원)")
     return flags.tolist(), reasons.tolist()
 
-def detect_split_payment(df, merchant_col, min_count=2):
+def detect_split_payment(df, merchant_col, min_count=2, hours_window=6):
     n = len(df)
     flags, reasons = [False]*n, [""]*n
     try:
         work = df.copy()
-        work["_d_"] = df["_dt_"].dt.date          # parse_dt()로 이미 처리된 컬럼 사용
+        work["_d_"] = df["_dt_"].dt.date
         work["_m_"] = df[merchant_col].astype(str).str.strip()
         work["_p_"] = range(n)
+        # 실제 시간 정보 존재 여부 (자정이 아닌 시간이 1건 이상이면 True)
+        has_t = bool(((df["_dt_"].dt.hour != 0) | (df["_dt_"].dt.minute != 0)).any())
         for (d, m), g in work.groupby(["_d_", "_m_"]):
             if len(g) < min_count or m in ("nan","") or pd.isna(d):
                 continue
+            if has_t:
+                # 시간 정보가 있으면 6시간 이내 거래만 분할결제로 인정
+                times = df["_dt_"].loc[g.index].dropna()
+                if len(times) < min_count:
+                    continue
+                span_h = (times.max() - times.min()).total_seconds() / 3600
+                if span_h > hours_window:
+                    continue
             for idx in g.index:
                 p = work.loc[idx, "_p_"]
                 flags[p] = True
-                reasons[p] = f"분할결제({len(g)}회/동일일)"
+                reasons[p] = f"분할결제({len(g)}회/6시간내)"
     except Exception:
         pass
     return flags, reasons
@@ -224,8 +247,16 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
     HDR_FONT  = Font(bold=True, color="FFFFFF")
     num_cols = {c for c in [amount_col, supply_col, vat_col] if c}
 
+    def safe_val(v):
+        if v is None: return ""
+        try:
+            if pd.isna(v): return ""
+        except Exception:
+            pass
+        return v
+
     def row_vals(r):
-        return [("" if pd.isna(r.get(c,"")) else r.get(c,"")) for c in export_cols]
+        return [safe_val(r.get(c, "")) for c in export_cols]
 
     def write_header(ws):
         ws.append(export_cols)
@@ -247,23 +278,24 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
     def write_row(ws, row, is_cancel=False):
         ws.append(row_vals(row))
         rn = ws.max_row
-        risk = row.get("위험점수", 0)
+        try:
+            risk = int(row.get("위험점수", 0) or 0)
+        except Exception:
+            risk = 0
         if is_cancel:
             for c in ws[rn]: c.font = RED_FONT
-        elif risk >= 2:
+        elif risk >= 1:
             for c in ws[rn]: c.fill = RED_F
-        elif risk == 1:
-            for c in ws[rn]: c.fill = YEL_F
 
-    def write_subtotal(ws, grp):
+    def write_subtotal(ws, records):
         sub = [""]*len(export_cols)
         for col in num_cols:
             if col in export_cols:
                 i = export_cols.index(col)
                 try:
-                    sub[i] = pd.to_numeric(
-                        grp[col].astype(str).str.replace(",",""), errors="coerce"
-                    ).fillna(0).sum()
+                    vals = [float(str(r.get(col,"") or "0").replace(",","") or 0)
+                            for r in records]
+                    sub[i] = sum(v for v in vals if v == v)  # NaN-safe sum
                 except Exception:
                     pass
         ws.append(sub)
@@ -275,19 +307,28 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
     def write_sheet(ws, approved, cancelled):
         write_header(ws)
         if user_col and user_col in approved.columns and len(approved) > 0:
-            for owner in approved[user_col].dropna().unique():
-                grp  = approved[approved[user_col] == owner]
-                cgrp = (cancelled[cancelled[user_col] == owner]
-                        if len(cancelled) > 0 and user_col in cancelled.columns
-                        else pd.DataFrame())
+            # iterrows() 대신 to_dict('records')로 속도 개선
+            all_records = approved.to_dict("records")
+            cancel_records = cancelled.to_dict("records") if len(cancelled) > 0 else []
+            groups: dict = {}
+            for r in all_records:
+                key = r.get(user_col, "")
+                groups.setdefault(key, []).append(r)
+            cancel_groups: dict = {}
+            for r in cancel_records:
+                key = r.get(user_col, "")
+                cancel_groups.setdefault(key, []).append(r)
+            for owner, grp_records in groups.items():
+                if pd.isna(owner) if not isinstance(owner, str) else owner == "":
+                    continue
                 write_nm(ws, owner)
-                for _, r in grp.iterrows():
+                for r in grp_records:
                     write_row(ws, r)
-                for _, r in cgrp.iterrows():
+                for r in cancel_groups.get(owner, []):
                     write_row(ws, r, is_cancel=True)
-                write_subtotal(ws, grp)
+                write_subtotal(ws, grp_records)
         else:
-            for _, r in approved.iterrows():
+            for r in approved.to_dict("records"):
                 write_row(ws, r)
 
     wb = Workbook()
@@ -301,21 +342,14 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
                if "위험점수" in export_df.columns else export_df)
     write_sheet(ws_flag, flagged, pd.DataFrame())
 
-    ws_high = wb.create_sheet("고위험")
-    high = (export_df[export_df["위험점수"] >= 2]
-            if "위험점수" in export_df.columns else pd.DataFrame(columns=export_cols))
-    write_sheet(ws_high, high, pd.DataFrame())
-
     ws_sum = wb.create_sheet("요약")
     ws_sum.append(["구분", "값"])
-    total   = len(export_df)
+    total     = len(export_df)
     flagged_n = int((export_df["위험점수"] > 0).sum()) if "위험점수" in export_df.columns else 0
-    high_n    = int((export_df["위험점수"] >= 2).sum()) if "위험점수" in export_df.columns else 0
     for row in [
         ("총 승인건수", total),
         ("취소 거래(제외)", len(cancel_df)),
-        ("이상 의심 건수", flagged_n),
-        ("고위험 건수", high_n),
+        ("이상의심 건수", flagged_n),
         ("이상 비율", f"{flagged_n/total*100:.1f}%" if total else "0%"),
     ]:
         ws_sum.append(list(row))
@@ -561,7 +595,7 @@ def main():
         prog.progress(98, "결과 집계 중...")
         work["위험점수"] = work[flag_cols].sum(axis=1).astype(int) if flag_cols else 0
         work["위험등급"] = work["위험점수"].map(
-            lambda s: "🔴 위험" if s >= 2 else ("🟡 주의" if s == 1 else "🟢 정상")
+            lambda s: "🔴 이상의심" if s >= 1 else "🟢 정상"
         )
         rcols = [c for c in work.columns if c.endswith("_사유")]
         work["이상사유"] = work[rcols].apply(
@@ -656,7 +690,7 @@ def main():
     fa, fb = st.columns([1,2])
     with fa:
         show_f = st.selectbox("표시 범위",
-                               ["전체","이상 의심만 (주의+위험)","고위험만 (🔴 위험)"])
+                               ["전체", "이상의심만"])
     with fb:
         type_opts = [FLAG_LABEL.get(c,c) for c in flag_cols]
         type_f = st.multiselect("이상징후 유형 필터", options=type_opts)
@@ -665,10 +699,8 @@ def main():
     if date_range and len(date_range) == 2:
         disp = disp[(disp["_dt_"].dt.date >= date_range[0]) &
                     (disp["_dt_"].dt.date <= date_range[1])]
-    if show_f == "이상 의심만 (주의+위험)":
+    if show_f == "이상의심만":
         disp = disp[disp["위험점수"] > 0]
-    elif show_f == "고위험만 (🔴 위험)":
-        disp = disp[disp["위험점수"] >= 2]
     if type_f:
         rev = {v:k for k,v in FLAG_LABEL.items()}
         tf  = [rev.get(t,t) for t in type_f if rev.get(t,t) in disp.columns]
@@ -690,8 +722,7 @@ def main():
         disp = disp.head(MAX_ROWS)
 
     def _grade_bg(s):
-        return ["background-color:#fde8e8" if "위험" in str(v)
-                else "background-color:#fef9e7" if "주의" in str(v)
+        return ["background-color:#fde8e8" if "이상의심" in str(v)
                 else "" for v in s]
 
     styled = disp[show_cols].style
