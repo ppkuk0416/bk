@@ -224,8 +224,16 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
     HDR_FONT  = Font(bold=True, color="FFFFFF")
     num_cols = {c for c in [amount_col, supply_col, vat_col] if c}
 
+    def safe_val(v):
+        if v is None: return ""
+        try:
+            if pd.isna(v): return ""
+        except Exception:
+            pass
+        return v
+
     def row_vals(r):
-        return [("" if pd.isna(r.get(c,"")) else r.get(c,"")) for c in export_cols]
+        return [safe_val(r.get(c, "")) for c in export_cols]
 
     def write_header(ws):
         ws.append(export_cols)
@@ -247,7 +255,10 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
     def write_row(ws, row, is_cancel=False):
         ws.append(row_vals(row))
         rn = ws.max_row
-        risk = row.get("위험점수", 0)
+        try:
+            risk = int(row.get("위험점수", 0) or 0)
+        except Exception:
+            risk = 0
         if is_cancel:
             for c in ws[rn]: c.font = RED_FONT
         elif risk >= 2:
@@ -255,15 +266,15 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
         elif risk == 1:
             for c in ws[rn]: c.fill = YEL_F
 
-    def write_subtotal(ws, grp):
+    def write_subtotal(ws, records):
         sub = [""]*len(export_cols)
         for col in num_cols:
             if col in export_cols:
                 i = export_cols.index(col)
                 try:
-                    sub[i] = pd.to_numeric(
-                        grp[col].astype(str).str.replace(",",""), errors="coerce"
-                    ).fillna(0).sum()
+                    vals = [float(str(r.get(col,"") or "0").replace(",","") or 0)
+                            for r in records]
+                    sub[i] = sum(v for v in vals if v == v)  # NaN-safe sum
                 except Exception:
                     pass
         ws.append(sub)
@@ -275,19 +286,28 @@ def write_grouped_excel(buf, export_df, cancel_df, user_col, amount_col,
     def write_sheet(ws, approved, cancelled):
         write_header(ws)
         if user_col and user_col in approved.columns and len(approved) > 0:
-            for owner in approved[user_col].dropna().unique():
-                grp  = approved[approved[user_col] == owner]
-                cgrp = (cancelled[cancelled[user_col] == owner]
-                        if len(cancelled) > 0 and user_col in cancelled.columns
-                        else pd.DataFrame())
+            # iterrows() 대신 to_dict('records')로 속도 개선
+            all_records = approved.to_dict("records")
+            cancel_records = cancelled.to_dict("records") if len(cancelled) > 0 else []
+            groups: dict = {}
+            for r in all_records:
+                key = r.get(user_col, "")
+                groups.setdefault(key, []).append(r)
+            cancel_groups: dict = {}
+            for r in cancel_records:
+                key = r.get(user_col, "")
+                cancel_groups.setdefault(key, []).append(r)
+            for owner, grp_records in groups.items():
+                if pd.isna(owner) if not isinstance(owner, str) else owner == "":
+                    continue
                 write_nm(ws, owner)
-                for _, r in grp.iterrows():
+                for r in grp_records:
                     write_row(ws, r)
-                for _, r in cgrp.iterrows():
+                for r in cancel_groups.get(owner, []):
                     write_row(ws, r, is_cancel=True)
-                write_subtotal(ws, grp)
+                write_subtotal(ws, grp_records)
         else:
-            for _, r in approved.iterrows():
+            for r in approved.to_dict("records"):
                 write_row(ws, r)
 
     wb = Workbook()
