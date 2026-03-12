@@ -498,11 +498,9 @@ def main():
     fkey = f"{uploaded.name}_{uploaded.size}"
     if st.session_state.get("_fkey") != fkey:
         st.session_state.pop("_cache", None)
-        st.session_state.pop(f"_excel_{fkey}", None)
         st.session_state["_fkey"] = fkey
 
     if run:
-        st.session_state.pop(f"_excel_{fkey}", None)  # 재실행 시 엑셀 캐시 초기화
         prog = st.progress(0, "분석 준비 중...")
         work = df.copy()
 
@@ -603,57 +601,49 @@ def main():
     # ── 엑셀 다운로드 ─────────────────────────────────────────────────────────
     st.header("4️⃣ 분석 결과")
 
-    # 스크리닝 결과가 바뀔 때만 엑셀 재생성 (매 렌더링 재생성 방지)
-    excel_cache_key = f"_excel_{fkey}"
-    if excel_cache_key not in st.session_state:
-        try:
-            drop = (list(flag_cols)
-                    + [c for c in result.columns if c.endswith("_사유")]
-                    + ["_dt_"])
-            export = result.drop(columns=drop, errors="ignore")
+    drop = (list(flag_cols)
+            + [c for c in result.columns if c.endswith("_사유")]
+            + ["_dt_"])
+    export = result.drop(columns=drop, errors="ignore")
 
-            if len(cancel_df) > 0:
-                cexp = cancel_df.drop(columns=[c for c in drop if c in cancel_df.columns], errors="ignore")
-                for col in ["위험등급","이상사유","위험점수"]:
-                    if col not in cexp.columns:
-                        cexp[col] = "취소"
-            else:
-                cexp = pd.DataFrame()
+    if len(cancel_df) > 0:
+        cexp = cancel_df.drop(columns=[c for c in drop if c in cancel_df.columns], errors="ignore")
+        for col in ["위험등급","이상사유","위험점수"]:
+            if col not in cexp.columns:
+                cexp[col] = "취소"
+    else:
+        cexp = pd.DataFrame()
 
-            desired = [
-                dept_col, user_col, date_col, time_col,
-                memo_col, acct_col, merchant_col, category_col, amount_col,
-                supply_col, vat_col_,
-                "이상사유", "위험등급",
-            ]
-            seen: set = set()
-            ecols: list = []
-            for c in desired:
-                if c and c in export.columns and c not in seen:
-                    ecols.append(c); seen.add(c)
-            skip = set(drop) | {"위험점수"}
-            for c in export.columns:
-                if c not in seen and c not in skip:
-                    ecols.append(c); seen.add(c)
+    desired = [
+        dept_col, user_col, date_col, time_col,
+        memo_col, acct_col, merchant_col, category_col, amount_col,
+        supply_col, vat_col_,
+        "이상사유", "위험등급",
+    ]
+    seen: set = set()
+    ecols: list = []
+    for c in desired:
+        if c and c in export.columns and c not in seen:
+            ecols.append(c); seen.add(c)
+    skip = set(drop) | {"위험점수"}
+    for c in export.columns:
+        if c not in seen and c not in skip:
+            ecols.append(c); seen.add(c)
 
-            buf = io.BytesIO()
-            write_grouped_excel(buf, export, cexp, user_col, amount_col,
-                                supply_col, vat_col_, ecols)
-            st.session_state[excel_cache_key] = (buf.getvalue(), Path(uploaded.name).stem)
-        except Exception as e:
-            st.error(f"엑셀 생성 오류: {e}")
-            st.session_state[excel_cache_key] = None
-
-    excel_data = st.session_state.get(excel_cache_key)
-    if excel_data:
-        excel_bytes, stem = excel_data
+    try:
+        buf = io.BytesIO()
+        write_grouped_excel(buf, export, cexp, user_col, amount_col,
+                            supply_col, vat_col_, ecols)
+        buf.seek(0)
         st.download_button(
             label="📥 분석 결과 엑셀 다운로드",
-            data=excel_bytes,
-            file_name=f"{stem}_스크리닝.xlsx",
+            data=buf.getvalue(),
+            file_name=f"{Path(uploaded.name).stem}_스크리닝.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+    except Exception as e:
+        st.error(f"엑셀 생성 오류: {e}")
 
     # ── 상세 결과 테이블 ───────────────────────────────────────────────────────
     st.subheader("📋 상세 결과")
