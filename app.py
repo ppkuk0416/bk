@@ -95,11 +95,15 @@ def to_none(v):
 # ─────────────────────────────────────────────────────────────────────────────
 def parse_dt(df, date_col, time_col):
     try:
+        dates = pd.to_datetime(df[date_col], errors="coerce")
         if time_col and time_col in df.columns:
-            return pd.to_datetime(
+            combined = pd.to_datetime(
                 df[date_col].astype(str) + " " + df[time_col].astype(str), errors="coerce"
             )
-        return pd.to_datetime(df[date_col], errors="coerce")
+            # 결합 파싱이 날짜 단독보다 NaT가 많으면(시간 형식 불일치) 날짜만 사용
+            if combined.notna().sum() >= dates.notna().sum():
+                return combined
+        return dates
     except Exception:
         return pd.Series([pd.NaT] * len(df), index=df.index)
 
